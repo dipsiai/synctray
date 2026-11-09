@@ -3,12 +3,13 @@ const path = require('path');
 const fs = require('fs');
 const { Store } = require('./store');
 const { Net, HTTP_PORT } = require('./net');
+const { STRINGS, pickLanguage, translator } = require('./i18n');
 
 const isMac = process.platform === 'darwin';
 const WIDTH = 380;
 const HEIGHT = 560;
 
-// SYNC_PROFILE=ikinci npm start → aynı makinede ikinci bir "cihaz" açar (deneme için).
+// SYNC_PROFILE=second npm start → runs a second "device" on the same machine (for testing).
 const profile = process.env.SYNC_PROFILE;
 if (profile) app.setPath('userData', `${app.getPath('userData')}-${profile}`);
 const primary = profile ? true : app.requestSingleInstanceLock();
@@ -19,17 +20,22 @@ let tray;
 let win;
 let lastHide = 0;
 let dialogOpen = false;
+let lang = 'en';
+let t = translator(lang);
 
 if (!primary) {
   app.quit();
 } else {
   app.on('second-instance', () => showWindow());
   app.whenReady().then(init);
-  app.on('window-all-closed', () => {}); // tepside yaşamaya devam et
+  app.on('window-all-closed', () => {}); // keep living in the tray
 }
 
 async function init() {
   if (isMac) app.dock.hide();
+  // SYNC_LANG=en|tr forces a language; otherwise it follows the operating system.
+  lang = process.env.SYNC_LANG || pickLanguage(app.getLocale());
+  t = translator(lang);
 
   store = new Store(app.getPath('userData'));
   net = new Net(store);
@@ -78,7 +84,7 @@ function createWindow() {
   const shot = process.env.SYNC_DEBUG_SHOT;
   if (shot) {
     win.webContents.once('did-finish-load', async () => {
-      dialogOpen = true; // odak kaybında gizlenmesin
+      dialogOpen = true; // don't hide on focus loss
       showWindow();
       await new Promise((r) => setTimeout(r, Number(process.env.SYNC_DEBUG_DELAY) || 1500));
       fs.writeFileSync(shot, (await win.webContents.capturePage()).toPNG());
@@ -93,33 +99,33 @@ function createTray() {
   tray.setToolTip('SyncTray');
 
   tray.on('click', () => {
-    // Pencere açıkken ikona basmak önce blur ile gizler; hemen ardından gelen tıklama tekrar açmasın.
+    // Clicking the icon while the window is open first hides it via blur; ignore the click that follows.
     if (win.isVisible()) hideWindow();
     else if (Date.now() - lastHide > 250) showWindow();
   });
   tray.on('right-click', () => tray.popUpContextMenu(trayMenu()));
-  // macOS: dosyayı doğrudan menü çubuğundaki ikona bırak.
+  // macOS: drop a file straight onto the menu bar icon.
   tray.on('drop-files', (_event, files) => addFiles(files));
 }
 
 function trayMenu() {
   const { openAtLogin } = app.getLoginItemSettings();
   return Menu.buildFromTemplate([
-    { label: 'SyncTray\'i aç', click: showWindow },
+    { label: t('trayOpen'), click: showWindow },
     {
-      label: 'Panodaki metni gönder',
+      label: t('traySendClipboard'),
       click: () => addText(clipboard.readText()),
     },
     { type: 'separator' },
     {
-      label: 'Bilgisayar açılınca başlat',
+      label: t('trayAutostart'),
       type: 'checkbox',
       checked: openAtLogin,
       enabled: app.isPackaged,
       click: (item) => app.setLoginItemSettings({ openAtLogin: item.checked }),
     },
     { type: 'separator' },
-    { label: 'Çıkış', click: quit },
+    { label: t('trayQuit'), click: quit },
   ]);
 }
 
@@ -128,7 +134,7 @@ function showWindow() {
   const area = screen.getDisplayMatching(icon).workArea;
   const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
   const x = clamp(Math.round(icon.x + icon.width / 2 - WIDTH / 2), area.x + 8, area.x + area.width - WIDTH - 8);
-  // Tepsi üstteyse (macOS) pencere altına, alttaysa (Windows) üstüne açılır.
+  // Tray at the top (macOS): open below it. Tray at the bottom (Windows): open above it.
   const below = icon.y < area.y + area.height / 2;
   const y = below ? icon.y + icon.height + 6 : icon.y - HEIGHT - 6;
   win.setPosition(x, clamp(y, area.y + 8, area.y + area.height - HEIGHT - 8), false);
@@ -172,7 +178,7 @@ function send(channel, data) {
 const pushState = () => send('state', getState());
 const toast = (message) => send('toast', message);
 
-// Art arda gelenlerde bildirim yağmuru olmasın: birkaç saniyede en fazla bir bildirim.
+// Avoid a burst of notifications when many items arrive: at most one every few seconds.
 let lastNote = 0;
 function notifyIncoming(items) {
   if (win.isVisible() || !Notification.isSupported() || Date.now() - lastNote < 4000) return;
@@ -181,8 +187,8 @@ function notifyIncoming(items) {
   const single = items.length === 1;
   const note = new Notification({
     title: single
-      ? `${item.from.name} bir ${item.type === 'text' ? 'metin' : 'dosya'} gönderdi`
-      : `${item.from.name} ${items.length} öğe gönderdi`,
+      ? t(item.type === 'text' ? 'noteText' : 'noteFile', { name: item.from.name })
+      : t('noteMany', { name: item.from.name, count: items.length }),
     body: single ? (item.type === 'text' ? item.text.trim().slice(0, 120) : item.name) : '',
   });
   note.on('click', showWindow);
@@ -194,9 +200,9 @@ async function addText(text) {
   try {
     const item = await store.addText(text);
     net.publish(item);
-    toast(item.type === 'file' ? 'Metin çok uzun, dosya olarak gönderildi' : 'Gönderildi');
+    toast(t(item.type === 'file' ? 'sentAsFile' : 'sent'));
   } catch (err) {
-    toast(`Gönderilemedi: ${err.message}`);
+    toast(t('sendFailed', { error: err.message }));
   }
 }
 
@@ -206,10 +212,10 @@ async function addFiles(paths) {
   for (const p of paths) {
     try {
       const { size } = await fs.promises.stat(p);
-      if (size > BIG_FILE) toast(`${path.basename(p)} hazırlanıyor…`);
+      if (size > BIG_FILE) toast(t('preparing', { name: path.basename(p) }));
       net.publish(await store.addFile(p));
     } catch (err) {
-      toast(`${path.basename(p)}: ${err.message}`);
+      toast(`${path.basename(p)}: ${err.code === 'IS_DIRECTORY' ? t('noFolders') : err.message}`);
     }
   }
 }
@@ -222,7 +228,7 @@ function uniquePath(dir, name) {
   return target;
 }
 
-// Çift tıklayınca kod çalıştırabilen dosya türleri: kaydetmeden önce ayrıca onay istenir.
+// File types that can run code when double-clicked: ask before saving them.
 const RISKY_EXT = new Set(
   ('exe msi msix bat cmd com scr pif ps1 vbs vbe js jse wsf wsh hta lnk reg jar cpl dll ' +
     'app command pkg dmg sh scpt workflow docm xlsm pptm iso img').split(' ')
@@ -234,9 +240,9 @@ async function confirmRisky(item, target) {
   const { response } = await withDialog(() =>
     dialog.showMessageBox(win, {
       type: 'warning',
-      message: `"${item.name}" çalıştırılabilir türde bir dosya (.${ext})`,
-      detail: `Gönderen: ${item.from.name}. Bunu sen göndermediysen kaydetme; açıldığında bilgisayarında program çalıştırabilir.`,
-      buttons: ['Vazgeç', 'Yine de kaydet'],
+      message: t('riskyTitle', { name: item.name, ext }),
+      detail: t('riskyDetail', { from: item.from.name }),
+      buttons: [t('cancel'), t('saveAnyway')],
       defaultId: 0,
       cancelId: 0,
     })
@@ -247,13 +253,13 @@ async function confirmRisky(item, target) {
 async function saveFile(id, target) {
   const item = store.get(id);
   if (!item || item.type !== 'file') return;
-  if (!store.hasFile(id)) return toast('Dosya henüz aktarılmadı; gönderen cihaz açık olmalı');
+  if (!store.hasFile(id)) return toast(t('notReady'));
   if (!(await confirmRisky(item, target))) return;
   try {
     await fs.promises.copyFile(store.filePath(id), target);
-    toast(`Kaydedildi: ${path.basename(target)}`);
+    toast(t('saved', { name: path.basename(target) }));
   } catch (err) {
-    toast(`Kaydedilemedi: ${err.message}`);
+    toast(t('saveFailed', { error: err.message }));
   }
 }
 
@@ -271,7 +277,7 @@ async function saveAs(id) {
   if (!result.canceled && result.filePath) await saveFile(id, result.filePath);
 }
 
-// Sistem diyaloğu açıkken pencere odağı kaybeder; bu sırada gizlenmesin.
+// A system dialog takes focus away from the window; don't hide while one is open.
 async function withDialog(fn) {
   dialogOpen = true;
   try {
@@ -301,9 +307,9 @@ async function clearAll() {
   const { response } = await withDialog(() =>
     dialog.showMessageBox(win, {
       type: 'warning',
-      message: `${count} öğenin tümü silinsin mi?`,
-      detail: 'Metinler ve dosyalar bağlı tüm cihazlardan silinir. Masaüstüne indirdiğin dosyalara dokunulmaz. Bu işlem geri alınamaz.',
-      buttons: ['Vazgeç', 'Tümünü sil'],
+      message: t('clearTitle', { count }),
+      detail: t('clearDetail'),
+      buttons: [t('cancel'), t('clearConfirm')],
       defaultId: 0,
       cancelId: 0,
     })
@@ -312,7 +318,7 @@ async function clearAll() {
   const ts = Date.now();
   const ids = store.clear(ts);
   net.publishDelete(ids, ts);
-  toast('Tümü temizlendi');
+  toast(t('cleared'));
 }
 
 function itemMenu(id) {
@@ -321,24 +327,25 @@ function itemMenu(id) {
   const template =
     item.type === 'file'
       ? [
-          { label: 'Masaüstüne indir', click: () => downloadToDesktop(id) },
-          { label: 'Farklı kaydet…', click: () => saveAs(id) },
+          { label: t('saveToDesktop'), click: () => downloadToDesktop(id) },
+          { label: t('saveAs'), click: () => saveAs(id) },
         ]
       : [
           {
-            label: 'Kopyala',
+            label: t('copy'),
             click: () => {
-              if (copyText(id)) toast('Kopyalandı');
+              if (copyText(id)) toast(t('copied'));
             },
           },
         ];
-  template.push({ type: 'separator' }, { label: 'Sil (tüm cihazlardan)', click: () => removeItem(id) });
+  template.push({ type: 'separator' }, { label: t('deleteEverywhere'), click: () => removeItem(id) });
   Menu.buildFromTemplate(template).popup({ window: win });
 }
 
 function registerIpc() {
   const handlers = {
     state: () => getState(),
+    strings: () => ({ lang, strings: STRINGS[lang] || STRINGS.en }),
     'add-text': (text) => addText(text),
     'add-files': (paths) => addFiles(paths.filter((p) => typeof p === 'string' && p)),
     'add-blob': async ({ name, data }) => net.publish(await store.addBuffer(name, Buffer.from(data))),
@@ -360,7 +367,7 @@ function registerIpc() {
     },
     'add-manual-peer': (address) => {
       const clean = String(address).trim();
-      if (!/^[\w.-]+(:\d{1,5})?$/.test(clean)) return toast('Geçersiz adres. Örnek: 192.168.1.25');
+      if (!/^[\w.-]+(:\d{1,5})?$/.test(clean)) return toast(t('badAddress'));
       if (!store.state.manualPeers.includes(clean)) store.set({ manualPeers: [...store.state.manualPeers, clean] });
       net.tick();
     },

@@ -1,22 +1,22 @@
-// Yerel durum: cihaz kimliği, eşleşme kodu, paylaşılan öğeler ve dosyalar.
-// Electron'a bağımlı değildir; düz Node ile de çalışır (testler bunu kullanır).
+// Local state: device identity, pairing code, shared items and files.
+// Does not depend on Electron; runs under plain Node too (the tests rely on this).
 const { EventEmitter } = require('events');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 
-const MAX_ITEMS = 50; // listede tutulan en fazla öğe; eskiler kendiliğinden düşer
-const MAX_AGE = 7 * 24 * 3600 * 1000; // bu süreden eski öğeler silinir
-const MAX_INLINE_TEXT = 100 * 1000; // daha uzun metinler .txt dosyası olarak gönderilir
+const MAX_ITEMS = 50; // most items kept in the list; older ones drop off
+const MAX_AGE = 7 * 24 * 3600 * 1000; // items older than this are deleted
+const MAX_INLINE_TEXT = 100 * 1000; // longer texts are sent as a .txt file
 const MAX_TEXT = 4 * 1024 * 1024;
 const TOMBSTONE_TTL = 30 * 24 * 3600 * 1000;
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
-// Sıra her cihazda aynı çıkmalı: yeni olan üstte, aynı milisaniyede kimliğe göre.
+// The order must come out identical on every device: newest first, ties broken by id.
 const order = (a, b) => b.ts - a.ts || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-const RM = { force: true, maxRetries: 5, retryDelay: 200 }; // Windows'ta açık dosya için tekrar dener
+const RM = { force: true, maxRetries: 5, retryDelay: 200 }; // retries for files still open on Windows
 
 function randomCode() {
   const bytes = crypto.randomBytes(12);
@@ -46,7 +46,7 @@ class Store extends EventEmitter {
     try {
       Object.assign(this.state, JSON.parse(fs.readFileSync(this.statePath, 'utf8')));
     } catch {
-      // ilk çalıştırma ya da bozuk dosya: varsayılanlarla devam
+      // first run or corrupt file: continue with defaults
     }
     this.pruneTombstones();
     this.state.items.sort(order);
@@ -55,13 +55,13 @@ class Store extends EventEmitter {
     this.save();
   }
 
-  // Aynı milisaniyede eklenenler bile ayrı zaman damgası alır.
+  // Items added in the same millisecond still get distinct timestamps.
   now() {
     this.lastTs = Math.max(Date.now(), (this.lastTs || 0) + 1);
     return this.lastTs;
   }
 
-  // Süresi dolan öğeleri siler. Kural her cihazda aynı olduğu için duyurmaya gerek yok.
+  // Deletes expired items. The rule is the same on every device, so nothing is announced.
   expire() {
     const limit = Date.now() - MAX_AGE;
     const old = this.state.items.filter((i) => i.ts < limit);
@@ -71,7 +71,7 @@ class Store extends EventEmitter {
     this.changed();
   }
 
-  // Hiçbir öğeye ait olmayan dosyaları ve yarım kalmış aktarımları temizler.
+  // Removes files that belong to no item, and leftovers of interrupted transfers.
   sweep() {
     const known = new Set(this.state.items.map((i) => i.id));
     for (const name of fs.readdirSync(this.filesDir)) {
@@ -95,7 +95,7 @@ class Store extends EventEmitter {
   }
 
   filePath(id) {
-    if (!ID_RE.test(id)) throw new Error('geçersiz id');
+    if (!ID_RE.test(id)) throw new Error('invalid id');
     return path.join(this.filesDir, id);
   }
 
@@ -120,7 +120,7 @@ class Store extends EventEmitter {
       const d = new Date();
       const two = (n) => String(n).padStart(2, '0');
       const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
-      return this.addBuffer(`metin-${stamp}.txt`, Buffer.from(text, 'utf8'));
+      return this.addBuffer(`text-${stamp}.txt`, Buffer.from(text, 'utf8'));
     }
     const item = { id: crypto.randomUUID(), type: 'text', text, from: this.device, ts: this.now() };
     this.insert(item);
@@ -129,9 +129,9 @@ class Store extends EventEmitter {
 
   async addFile(srcPath, name) {
     const stat = await fs.promises.stat(srcPath);
-    if (!stat.isFile()) throw new Error('Klasörler desteklenmiyor, önce zip yap');
+    if (!stat.isFile()) throw Object.assign(new Error('folders are not supported'), { code: 'IS_DIRECTORY' });
     const id = crypto.randomUUID();
-    // Destekleyen disklerde (APFS) anında klonlar, diğerlerinde normal kopyalar.
+    // Clones instantly on disks that support it (APFS), plain copy elsewhere.
     await fs.promises.copyFile(srcPath, this.filePath(id), fs.constants.COPYFILE_FICLONE);
     const item = {
       id,
@@ -151,7 +151,7 @@ class Store extends EventEmitter {
     const item = {
       id,
       type: 'file',
-      name: path.basename(name || 'dosya'),
+      name: path.basename(name || 'file'),
       size: buffer.length,
       from: this.device,
       ts: this.now(),
@@ -160,7 +160,7 @@ class Store extends EventEmitter {
     return item;
   }
 
-  // Başka cihazdan gelen öğe. Yeni eklendiyse true döner.
+  // An item from another device. Returns true if it was new.
   addRemote(raw) {
     const item = sanitize(raw);
     if (!item) return false;
@@ -202,7 +202,7 @@ class Store extends EventEmitter {
     if (dirty) this.changed();
   }
 
-  // Her şeyi siler; diğer cihazlara bildirmek için silinen id'leri döner.
+  // Deletes everything; returns the removed ids so other devices can be told.
   clear(ts = Date.now()) {
     const ids = this.state.items.map((i) => i.id);
     this.applyTombstones(Object.fromEntries(ids.map((id) => [id, ts])));
@@ -236,7 +236,7 @@ function sanitize(raw) {
   const base = {
     id: raw.id,
     type: raw.type,
-    from: { id: raw.from.id.slice(0, 64), name: String(raw.from.name || 'Cihaz').slice(0, 40) },
+    from: { id: raw.from.id.slice(0, 64), name: String(raw.from.name || 'Device').slice(0, 40) },
     ts: raw.ts,
   };
   if (raw.type === 'text') {
@@ -244,7 +244,7 @@ function sanitize(raw) {
     return { ...base, text: raw.text };
   }
   if (raw.type === 'file') {
-    const name = path.basename(String(raw.name || 'dosya').replace(/\\/g, '/')).slice(0, 255) || 'dosya';
+    const name = path.basename(String(raw.name || 'file').replace(/\\/g, '/')).slice(0, 255) || 'file';
     return { ...base, name, size: Number(raw.size) || 0 };
   }
   return null;

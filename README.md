@@ -1,75 +1,89 @@
 # SyncTray
 
-Aynı ağdaki bilgisayarlar arasında metin ve dosya paylaşan sistem tepsisi uygulaması (macOS + Windows).
+A tray app that shares text and files between computers on the same local network. macOS and Windows, in any combination.
 
-> **English:** A tray app that shares text snippets and files between computers on the same local network (macOS + Windows). Paste text or drop a file on one machine, open the tray on the other, click to copy or right-click to save to the desktop. Devices find each other automatically, no server or account needed, and everything on the wire is encrypted with a key derived from a shared pairing code. Built with Electron, zero runtime dependencies. The UI and the rest of this README are in Turkish.
+Paste some text or drop a file on one computer, open the tray on the other, and it is there: click a text to copy it, right-click a file to save it to the desktop. No account, no server, nothing leaves your network.
 
-## Nasıl kullanılır
+[Türkçe README](README.tr.md)
 
-1. Tepsideki (macOS'ta menü çubuğundaki) ok ikonuna tıkla.
-2. Kutuya metni yapıştır ve **Gönder**'e bas (⌘↵ / Ctrl+Enter). Dosya için kutuya sürükle, **Dosya seç**'e bas ya da dosyayı panodan yapıştır.
-3. Diğer bilgisayarda ikona tıkla: son paylaşılanlar listede durur.
-   - Metne tıkla → panoya kopyalanır.
-   - Dosyaya sağ tıkla → **Masaüstüne indir** ya da **Farklı kaydet…**
+## Features
 
-Pencere başka yere tıklayınca kapanır; Finder/Explorer'dan dosya sürükleyeceksen önce **Sabitle**'ye bas. macOS'ta dosyayı doğrudan menü çubuğundaki ikona da bırakabilirsin.
+- Lives in the system tray (Windows) or menu bar (macOS)
+- Devices on the same network find each other automatically
+- Shares text snippets and files of any size, with a progress bar on both ends
+- Everything on the wire is encrypted (AES-256-GCM) with a key derived from a pairing code
+- Files are copied to the other device right away, so they stay available after the sender goes to sleep
+- Keeps the last 50 items for 7 days, with "clear all" across every device
+- English and Turkish UI, picked from the system language
+- No runtime dependencies beyond Electron
 
-## İlk kurulum (iki cihazı eşleştirme)
+## Install
 
-Her cihaz ilk açılışta rastgele bir eşleşme kodu üretir. **Ayarlar**'ı aç, bir cihazdaki kodu diğerine yaz. Aynı kodu taşıyan cihazlar birbirini otomatik bulur; üstte "… bağlı" yazısı ve yeşil nokta görünür.
+Download the latest build from [Releases](https://github.com/dipsiai/synctray/releases).
 
-Otomatik bulunmazsa (bazı modemler ve misafir ağları yayını engeller) Ayarlar'da görünen IP adresini diğer cihazdaki "Cihaz otomatik bulunmazsa" kutusuna yaz. Tek tarafta girmek yeterli.
+**Windows:** extract the zip anywhere and run `SyncTray.exe`. The build is unsigned, so SmartScreen warns on first launch: choose **More info → Run anyway**. When the firewall asks, allow access on **private networks**.
 
-Windows ilk açılışta güvenlik duvarı izni sorar: **Özel ağlar** için izin ver.
+**macOS:** open the dmg (`arm64` for Apple Silicon, `x64` for Intel) and drag SyncTray to Applications. The build is not notarized by Apple, so the first launch is blocked: open **System Settings → Privacy & Security** and choose **Open Anyway**.
 
-## Çalıştırma
+## Pairing two devices
 
-Node.js 20+ gerekir.
+Each device generates a random pairing code on first launch. Open **Settings** on one device and type its code into the other. Devices that share a code find each other; the header shows a green dot and the other device's name.
+
+If they do not find each other (some routers and guest networks block broadcast), type the address shown under Settings into the other device's "If a device is not found automatically" box. Doing this on one side is enough.
+
+## Usage
+
+1. Click the tray icon.
+2. Paste text and press **Send** (⌘↵ / Ctrl+Enter). For files: drop them on the window, use **Choose file**, or paste a file from the clipboard.
+3. On the other computer, click the tray icon:
+   - click a text to copy it
+   - right-click a file for **Save to Desktop** or **Save as…**
+
+The window closes when you click elsewhere; press **Pin** first if you want to drag files in from Finder or Explorer. On macOS you can also drop files straight onto the menu bar icon.
+
+## Security
+
+- All traffic between devices is encrypted and authenticated: texts, files, file names, device names and discovery packets. The key is derived from the pairing code with scrypt. Someone on the same network without the code cannot read, add, delete or alter anything. See [`src/crypto.js`](src/crypto.js).
+- Security rests on the pairing code, so keep it private. New installs generate a 12-character code; you can set a longer one in Settings.
+- Received files are stored under a random id with no extension. They only get their real name when you save them, and executable file types ask for confirmation first.
+- Not covered: data at rest is not encrypted, and the code has not had an independent security audit. It is built for networks you trust (home, office). For use across the internet, put the devices on a VPN such as Tailscale and add the peer's VPN address manually.
+
+## Run from source
+
+Requires Node.js 20 or later.
 
 ```bash
 npm install
 npm start
 ```
 
-Aynı bilgisayarda ikinci bir sahte cihaz açıp denemek için: `SYNC_PROFILE=ikinci npm start`
+To try it with a second fake device on the same machine: `SYNC_PROFILE=second npm start`. Set `SYNC_LANG=en` or `SYNC_LANG=tr` to force a language.
 
-## Kurulum paketi üretme
+## Build
 
 ```bash
-npm run dist:mac   # dist/ altında .dmg
-npm run dist:win   # dist/ altında SyncTray-0.1.0-win.zip
+npm run dist:mac   # dmg files in dist/
+npm run dist:win   # zip in dist/
 ```
 
-Windows'ta zip'i bir klasöre aç (ör. `C:\SyncTray`) ve `SyncTray.exe`'yi çalıştır; Node kurmak gerekmez. İmzasız olduğu için ilk açılışta SmartScreen uyarısı çıkar: **Ek bilgi → Yine de çalıştır**.
+## How it works
 
-Paketlenmiş sürümde tepsi ikonuna sağ tıklayıp **Bilgisayar açılınca başlat**'ı işaretleyebilirsin.
+- [`src/store.js`](src/store.js): the item list and files, kept in the app's data folder. Limits (item count, age, inline text size) are constants at the top.
+- [`src/net.js`](src/net.js): discovery over UDP broadcast (port 47801) and two-way sync over HTTP (port 47800).
+- [`src/crypto.js`](src/crypto.js): key derivation, sealed messages and the chunked file stream.
+- [`src/main.js`](src/main.js): tray icon, window, clipboard, saving files.
+- [`src/ui/`](src/ui): the window's interface.
+- [`src/i18n.js`](src/i18n.js): UI strings.
 
-## Nasıl çalışır
-
-- `src/store.js`: öğe listesi ve dosyalar, uygulama veri klasöründe tutulur. Son 50 öğe saklanır, 7 günden eskiler kendiliğinden silinir, 100.000 karakterden uzun metinler `.txt` dosyası olarak gönderilir (sabitler dosyanın başında).
-- `src/net.js`: cihazlar birbirini UDP yayınıyla (port 47801) bulur, öğeleri HTTP ile (port 47800) eşitler. Dosyalar hemen karşı cihaza kopyalanır, yani gönderen bilgisayar sonradan kapansa da dosya indirilebilir.
-- `src/main.js`: tepsi ikonu, pencere, pano ve masaüstüne kaydetme.
-- `src/ui/`: pencerenin arayüzü.
-
-## Güvenlik
-
-- **Ağdaki her şey şifrelidir** (AES-256-GCM): metinler, dosyalar, dosya adları, cihaz adı. Anahtar eşleşme kodundan scrypt ile türetilir; kodu bilmeyen biri trafiği dinlese de okuyamaz, içerik ekleyemez, silemez, değiştiremez. Ayrıntı: `src/crypto.js`.
-- Güvenlik eşleşme koduna dayanır: kodu kimseyle paylaşma. Yeni kurulumlar 12 karakterlik kod üretir; eski 8 karakterlik kodun varsa Ayarlar'dan daha uzun bir kod yazıp iki cihazda da güncelleyebilirsin.
-- Gelen dosyalar uygulama klasöründe rastgele bir kimlikle, uzantısız saklanır; gerçek adını ancak sen kaydedince alır. Çalıştırılabilir türlerde kaydetmeden önce onay istenir.
-- Kapsam dışı: diskteki veriler şifrelenmez (bilgisayarına erişen biri uygulama klasörünü okuyabilir) ve bağımsız bir güvenlik denetiminden geçmemiştir.
-
-İnternet üzerinden eşitleme henüz yok; eklendiğinde değişecek yer `src/net.js`.
-
-## Test
+## Tests
 
 ```bash
 npm test
-```
-
-İki sanal cihaz açıp metin, dosya, silme, geç katılma ve yetkisiz erişimi dener.
-
-```bash
 npm run test:stress
 ```
 
-Zorlama testleri: art arda yüzlerce metin, iki yönden aynı anda gönderme, 300 MB dosya, aktarım ortasında cihazın kapanması ya da donması, aktarım sırasında silme, sahte istek, ağdan geçen verinin okunamaması, bozulmuş ya da kesilmiş şifreli akış.
+`npm test` starts virtual devices on one machine and checks text, file, delete, late join and unauthorized access. The stress suite covers bursts of hundreds of texts, both devices sending at once, a 300 MB file, devices restarting or freezing mid-transfer, deleting during a transfer, forged requests, and that nothing on the wire is readable.
+
+## License
+
+[MIT](LICENSE)

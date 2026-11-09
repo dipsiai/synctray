@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="tr">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'">
@@ -7,52 +7,55 @@
   <link rel="stylesheet" href="ui.css">
 </head>
 <body>
+  <!-- Text comes from src/i18n.js: data-t fills the content, data-t-title and
+       data-t-placeholder fill those attributes. -->
   <header>
-    <div class="status" id="status"><span class="dot"></span><span id="status-text">Cihaz aranıyor…</span></div>
-    <button class="icon-btn" id="pin" title="Pencereyi sabitle (başka yere tıklayınca kapanmaz)">Sabitle</button>
-    <button class="icon-btn" id="settings-btn" title="Ayarlar">Ayarlar</button>
+    <div class="status" id="status"><span class="dot"></span><span id="status-text"></span></div>
+    <button class="icon-btn" id="pin" data-t="pin" data-t-title="pinTitle"></button>
+    <button class="icon-btn" id="settings-btn" data-t="settings"></button>
   </header>
 
   <main id="main-view">
     <section class="composer" id="composer">
-      <textarea id="input" placeholder="Metni buraya yapıştır ya da dosya sürükle…" spellcheck="false"></textarea>
+      <textarea id="input" data-t-placeholder="placeholder" spellcheck="false"></textarea>
       <div class="row">
-        <button id="pick">Dosya seç</button>
+        <button id="pick" data-t="pick"></button>
         <span class="hint" id="send-hint"></span>
-        <button class="primary" id="send" disabled>Gönder</button>
+        <button class="primary" id="send" data-t="send" disabled></button>
       </div>
     </section>
     <div class="list-head" id="list-head" hidden>
       <span id="list-count"></span>
-      <button id="clear-all">Tümünü temizle</button>
+      <button id="clear-all" data-t="clearAll"></button>
     </div>
     <ul id="list"></ul>
-    <p class="empty" id="empty">Henüz bir şey paylaşılmadı.<br>Yukarıya bir metin yapıştır ya da dosya bırak.</p>
+    <p class="empty" id="empty" data-t="empty"></p>
   </main>
 
   <main id="settings-view" hidden>
-    <label>Bu cihazın adı
+    <label><span data-t="deviceName"></span>
       <input id="device-name" maxlength="40">
     </label>
-    <label>Eşleşme kodu
+    <label><span data-t="pairingCode"></span>
       <input id="device-code" class="mono" maxlength="20" spellcheck="false">
     </label>
-    <p class="note">Aynı kodu girdiğin cihazlar birbirini görür. Diğer bilgisayarda bu kodu yaz.</p>
+    <p class="note" data-t="pairingNote"></p>
 
-    <h2>Bağlı cihazlar</h2>
+    <h2 data-t="connectedDevices"></h2>
     <ul class="plain" id="peer-list"></ul>
 
-    <h2>Cihaz otomatik bulunmazsa</h2>
-    <p class="note">Bu cihazın adresi: <span class="mono" id="addresses"></span><br>Diğer cihazın adresini buraya yaz:</p>
+    <h2 data-t="manualTitle"></h2>
+    <p class="note"><span data-t="thisAddress"></span> <span class="mono" id="addresses"></span></p>
+    <p class="note" data-t="enterOther"></p>
     <div class="row">
       <input id="manual-input" class="mono" placeholder="192.168.1.25" spellcheck="false">
-      <button id="manual-add">Ekle</button>
+      <button id="manual-add" data-t="add"></button>
     </div>
     <ul class="plain" id="manual-list"></ul>
 
     <div class="row end">
-      <button id="quit">SyncTray'den çık</button>
-      <button class="primary" id="settings-done">Tamam</button>
+      <button id="quit" data-t="quitApp"></button>
+      <button class="primary" id="settings-done" data-t="done"></button>
     </div>
   </main>
 

@@ -1,4 +1,4 @@
-// Tepsi ikonlarını kodla üretir (harici görsel aracı gerekmez). Çalıştır: npm run icons
+// Generates the tray icons in code (no image tools needed). Run: npm run icons
 const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
@@ -44,7 +44,7 @@ function png(size, pixel) {
   ]);
 }
 
-// Birim karede (0..1) şekiller: biri yukarı biri aşağı bakan iki ok.
+// Shapes in the unit square (0..1): two arrows, one pointing up and one down.
 function arrows(u, v) {
   const up = (x, y) =>
     (Math.abs(x - 0.32) <= 0.055 && y >= 0.36 && y <= 0.86) ||
@@ -58,7 +58,7 @@ function roundedSquare(u, v, radius) {
   return dx * dx + dy * dy <= radius * radius;
 }
 
-// Kenar yumuşatma için piksel başına 4x4 örnek alır; 0..1 arası kaplama döner.
+// Takes 4x4 samples per pixel for anti-aliasing; returns coverage between 0 and 1.
 function coverage(size, x, y, shape) {
   let hits = 0;
   for (let i = 0; i < 4; i++) {
@@ -69,11 +69,11 @@ function coverage(size, x, y, shape) {
   return hits / 16;
 }
 
-// macOS: siyah + alfa "template" görsel; sistem açık/koyu menü çubuğuna göre boyar.
+// macOS: black + alpha "template" image; the system tints it for light/dark menu bars.
 const template = (size) =>
   png(size, (x, y) => [0, 0, 0, Math.round(255 * coverage(size, x, y, arrows))]);
 
-// Windows: mavi zemin üstünde beyaz oklar; açık ve koyu görev çubuğunda okunur.
+// Windows: white arrows on a blue tile; readable on light and dark taskbars.
 const colored = (size) =>
   png(size, (x, y) => {
     const bg = coverage(size, x, y, (u, v) => roundedSquare(u, v, 0.22));
@@ -89,4 +89,4 @@ fs.writeFileSync(path.join(out, 'trayTemplate@2x.png'), template(32));
 fs.writeFileSync(path.join(out, 'tray.png'), colored(32));
 fs.writeFileSync(path.join(out, 'tray@2x.png'), colored(64));
 fs.writeFileSync(path.join(out, 'icon.png'), colored(512));
-console.log('ikonlar yazıldı →', out);
+console.log('icons written →', out);

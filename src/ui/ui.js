@@ -1,9 +1,22 @@
 const $ = (id) => document.getElementById(id);
-// `api` preload.js tarafından global olarak sağlanır.
+// `api` is provided as a global by preload.js.
 
 let state = null;
 let transfers = {};
 let toastTimer = null;
+let strings = {};
+
+// Translate a key from src/i18n.js, filling {placeholders}.
+function tr(key, vars = {}) {
+  return (strings[key] ?? key).replace(/\{(\w+)\}/g, (_m, k) => (k in vars ? String(vars[k]) : ''));
+}
+
+function applyStrings(lang) {
+  document.documentElement.lang = lang;
+  for (const node of document.querySelectorAll('[data-t]')) node.textContent = tr(node.dataset.t);
+  for (const node of document.querySelectorAll('[data-t-title]')) node.title = tr(node.dataset.tTitle);
+  for (const node of document.querySelectorAll('[data-t-placeholder]')) node.placeholder = tr(node.dataset.tPlaceholder);
+}
 
 function el(tag, props = {}, ...children) {
   const node = Object.assign(document.createElement(tag), props);
@@ -32,10 +45,10 @@ function formatSize(bytes) {
 
 function formatTime(ts) {
   const diff = Math.max(0, Date.now() - ts);
-  if (diff < 60e3) return 'şimdi';
-  if (diff < 3600e3) return `${Math.floor(diff / 60e3)} dk önce`;
-  if (diff < 24 * 3600e3) return `${Math.floor(diff / 3600e3)} sa önce`;
-  return new Date(ts).toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' });
+  if (diff < 60e3) return tr('now');
+  if (diff < 3600e3) return tr('minAgo', { n: Math.floor(diff / 60e3) });
+  if (diff < 24 * 3600e3) return tr('hourAgo', { n: Math.floor(diff / 3600e3) });
+  return new Date(ts).toLocaleDateString(tr('dateLocale'), { day: 'numeric', month: 'short' });
 }
 
 function formatCode(code) {
@@ -43,11 +56,11 @@ function formatCode(code) {
 }
 
 async function copyItem(id) {
-  if (await api.call('copy', id)) showToast('Kopyalandı');
+  if (await api.call('copy', id)) showToast(tr('copied'));
 }
 
 function renderItem(item) {
-  const who = item.mine ? 'Bu cihaz' : item.from.name;
+  const who = item.mine ? tr('thisDevice') : item.from.name;
   const meta = el('div', { className: 'meta' });
   let body;
   let action;
@@ -55,7 +68,7 @@ function renderItem(item) {
   if (item.type === 'text') {
     body = el('pre', { textContent: item.text.length > 600 ? `${item.text.slice(0, 600)}…` : item.text });
     meta.append(el('span', { textContent: `${who} · ${formatTime(item.ts)}` }));
-    action = el('button', { textContent: 'Kopyala' });
+    action = el('button', { textContent: tr('copy') });
     action.onclick = (e) => {
       e.stopPropagation();
       copyItem(item.id);
@@ -63,7 +76,7 @@ function renderItem(item) {
   } else {
     body = el('div', {}, el('div', { className: 'file-name', textContent: item.name }), el('div', { className: 'bar', hidden: true }, el('i')));
     meta.append(el('span', { className: 'info' }));
-    action = el('button', { textContent: 'Masaüstüne indir', disabled: !item.ready });
+    action = el('button', { textContent: tr('saveToDesktop'), disabled: !item.ready });
     action.onclick = (e) => {
       e.stopPropagation();
       api.call('download', item.id);
@@ -71,7 +84,7 @@ function renderItem(item) {
   }
   meta.append(action);
 
-  const li = el('li', { className: 'item', id: `item-${item.id}`, title: item.type === 'text' ? 'Tıkla: kopyala · Sağ tık: seçenekler' : 'Sağ tık: seçenekler' }, body, meta);
+  const li = el('li', { className: 'item', id: `item-${item.id}`, title: tr(item.type === 'text' ? 'textTitle' : 'fileTitle') }, body, meta);
   li.onclick = () => (item.type === 'text' ? copyItem(item.id) : api.call('menu', item.id));
   li.oncontextmenu = (e) => {
     e.preventDefault();
@@ -81,17 +94,17 @@ function renderItem(item) {
   return li;
 }
 
-// Dosya satırının durum yazısını ve ilerleme çubuğunu günceller (liste yeniden çizilmeden).
+// Updates a file row's status text and progress bar without redrawing the list.
 function paintFile(li, item) {
   const t = transfers[item.id];
-  const who = item.mine ? 'Bu cihaz' : item.from.name;
+  const who = item.mine ? tr('thisDevice') : item.from.name;
   let text = `${formatSize(item.size)} · ${who} · ${formatTime(item.ts)}`;
   if (t && t.total > 0) {
     const pct = Math.min(100, Math.floor((t.done / t.total) * 100));
-    text = `${t.dir === 'in' ? 'İndiriliyor' : 'Gönderiliyor'} %${pct} · ${formatSize(item.size)}`;
+    text = `${tr(t.dir === 'in' ? 'receiving' : 'sending', { pct })} · ${formatSize(item.size)}`;
     li.querySelector('.bar i').style.width = `${pct}%`;
   } else if (!item.ready) {
-    text = `Gönderen cihaz bekleniyor · ${formatSize(item.size)}`;
+    text = `${tr('waiting')} · ${formatSize(item.size)}`;
   }
   li.querySelector('.bar').hidden = !t;
   li.querySelector('.info').textContent = text;
@@ -111,7 +124,7 @@ function renderPlainList(target, entries, emptyText, onRemove) {
       ? entries.map((entry) => {
           const li = el('li', {}, el('span', { textContent: entry.label }));
           if (onRemove) {
-            const remove = el('button', { textContent: 'Kaldır' });
+            const remove = el('button', { textContent: tr('remove') });
             remove.onclick = () => onRemove(entry.value);
             li.append(remove);
           }
@@ -128,8 +141,8 @@ function render() {
 
   $('status').classList.toggle('online', peers.length > 0);
   $('status-text').textContent = peers.length
-    ? `${peers.map((p) => p.name).join(', ')} bağlı`
-    : 'Diğer cihaz aranıyor…';
+    ? tr('connected', { names: peers.map((p) => p.name).join(', ') })
+    : tr('searching');
   $('pin').classList.toggle('active', pinned);
   $('send-hint').textContent = isMac ? '⌘↵' : 'Ctrl+Enter';
 
@@ -137,13 +150,13 @@ function render() {
   $('empty').hidden = items.length > 0;
   $('list').hidden = items.length === 0;
   $('list-head').hidden = items.length === 0;
-  $('list-count').textContent = `${items.length} öğe`;
+  $('list-count').textContent = items.length === 1 ? tr('itemsOne') : tr('items', { n: items.length });
 
-  $('addresses').textContent = device.addresses.join(', ') || 'ağ bağlantısı yok';
+  $('addresses').textContent = device.addresses.join(', ') || tr('noNetwork');
   renderPlainList(
     $('peer-list'),
     peers.map((p) => ({ label: `${p.name} (${p.host})` })),
-    'Şu an bağlı cihaz yok'
+    tr('noPeers')
   );
   renderPlainList(
     $('manual-list'),
@@ -153,7 +166,7 @@ function render() {
   );
 }
 
-// ---- Gönderme ----
+// ---- Sending ----
 
 const input = $('input');
 
@@ -169,8 +182,8 @@ async function sendFiles(fileList) {
   for (const file of fileList) {
     const filePath = api.pathFor(file);
     if (filePath) paths.push(filePath);
-    // Panodan yapıştırılan görsel gibi diskte karşılığı olmayan veriler
-    else await api.call('add-blob', { name: file.name || 'pano.png', data: await file.arrayBuffer() });
+    // Data with no file on disk, such as an image pasted from the clipboard
+    else await api.call('add-blob', { name: file.name || 'clipboard.png', data: await file.arrayBuffer() });
   }
   if (paths.length) await api.call('add-files', paths);
 }
@@ -205,7 +218,7 @@ window.addEventListener('drop', (e) => {
   }
 });
 
-// ---- Üst çubuk ve ayarlar ----
+// ---- Header and settings ----
 
 $('pin').onclick = () => api.call('set-pinned', !state.pinned);
 
@@ -246,7 +259,7 @@ window.addEventListener('keydown', (e) => {
   else api.call('hide');
 });
 
-// ---- Ana süreçten gelen olaylar ----
+// ---- Events from the main process ----
 
 api.on('state', (next) => {
   state = next;
@@ -258,11 +271,13 @@ api.on('progress', (next) => {
   paintTransfers();
 });
 api.on('shown', () => {
-  render(); // "5 dk önce" gibi süreleri tazele
+  render(); // refresh relative times such as "5 min ago"
   if ($('settings-view').hidden) input.focus();
 });
 
-api.call('state').then((initial) => {
+Promise.all([api.call('strings'), api.call('state')]).then(([i18n, initial]) => {
+  strings = i18n.strings;
+  applyStrings(i18n.lang);
   state = initial;
   render();
 });

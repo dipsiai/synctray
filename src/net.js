@@ -1,9 +1,9 @@
-// Yerel ağ katmanı: cihazları UDP yayınıyla bulur, öğeleri HTTP ile eşitler.
-// Taşınan her şey (istek, yanıt, dosya, cihaz adı) eşleşme kodundan türetilen anahtarla
-// şifrelenir; ayrıntı için crypto.js.
-// İleride internet desteği eklenecekse değişecek tek dosya burasıdır: dışarıya
-// sunduğu arayüz start / stop / publish / publishDelete / peerList / transferState
-// ve 'peers', 'incoming', 'progress' olayları.
+// Local network layer: finds devices by UDP broadcast and syncs items over HTTP.
+// Everything on the wire (requests, responses, files, device names) is encrypted with a key
+// derived from the pairing code; see crypto.js.
+// If internet sync is ever added, this is the only file that should need to change. Its public
+// surface is start / stop / publish / publishDelete / peerList / transferState
+// and the 'peers', 'incoming' and 'progress' events.
 const { EventEmitter } = require('events');
 const http = require('http');
 const dgram = require('dgram');
@@ -15,7 +15,7 @@ const { pipeline } = require('stream/promises');
 const { deriveKeys, seal, open, encryptStream, decryptStream } = require('./crypto');
 
 const APP = 'synctray';
-const PROTOCOL = 3; // farklı sürümler birbirini görmez; yarım çalışan eşleşme olmasın
+const PROTOCOL = 3; // different versions ignore each other rather than half-working
 const HTTP_PORT = 47800;
 const UDP_PORT = 47801;
 const BEACON_MS = 3000;
@@ -39,12 +39,12 @@ class Net extends EventEmitter {
     this.timers = [];
     this.port = 0;
     this.running = false;
-    this.stallMs = 20000; // bu kadar süre veri gelmezse aktarım bırakılır ve yeniden denenir
+    this.stallMs = 20000; // a transfer with no data for this long is dropped and retried
     this.onStoreChange = () => this.abortOrphans();
   }
 
-  // Eşleşme kodundan türetilen anahtarlar; aynı kodu bilmeyen cihazlar ne görünür ne erişir.
-  // Türetme kasıtlı olarak yavaştır, bu yüzden kod değişene kadar saklanır.
+  // Keys derived from the pairing code; devices without the code can neither see nor reach us.
+  // Derivation is deliberately slow, so the result is cached until the code changes.
   keys() {
     const { code } = this.store.state;
     if (this.keysFor !== code) {
@@ -58,8 +58,8 @@ class Net extends EventEmitter {
     return this.keys().group;
   }
 
-  // Her isteğin mühürlü başlığı: kim, ne zaman. Yönteme ve yola bağlıdır, başka istekte geçmez.
-  // Dönen `nonce` bu isteğin kimliğidir; gövde, yanıt ve dosya akışı ona bağlanır.
+  // Sealed header of every request: who and when. Bound to the method and path.
+  // The returned `nonce` identifies the request; body, response and file stream are bound to it.
   sealHeader(method, pathname) {
     const { id, name } = this.store.device;
     const meta = JSON.stringify({ ts: Date.now(), id, name, port: this.port });
@@ -95,7 +95,7 @@ class Net extends EventEmitter {
       try {
         this.udp.setBroadcast(true);
       } catch {
-        // yayın açılamazsa elle eklenen cihazlar yine çalışır
+        // if broadcast is unavailable, manually added devices still work
       }
       this.beacon();
     });
@@ -122,11 +122,11 @@ class Net extends EventEmitter {
     try {
       this.udp?.close();
     } catch {
-      // zaten kapalı
+      // already closed
     }
   }
 
-  // Eşleşme kodu değişince eski grubun cihazlarını unut.
+  // When the pairing code changes, forget the devices of the old group.
   reset() {
     this.peers.clear();
     this.emit('peers');
@@ -140,7 +140,7 @@ class Net extends EventEmitter {
       .filter((i) => i && i.family === 'IPv4' && !i.internal);
   }
 
-  // ---- Keşif ----
+  // ---- Discovery ----
 
   beacon() {
     if (!this.udp || !this.running) return;
@@ -166,9 +166,9 @@ class Net extends EventEmitter {
     if (!m || m.app !== APP || m.v !== PROTOCOL || m.group !== this.group()) return;
     try {
       const info = JSON.parse(open(this.keys().enc, Buffer.from(String(m.box), 'base64'), 'beacon'));
-      this.upsert(String(info.id), String(info.name || 'Cihaz'), rinfo.address, Number(info.port));
+      this.upsert(String(info.id), String(info.name || 'Device'), rinfo.address, Number(info.port));
     } catch {
-      // kodu bilmeyen biri taklit etmeye çalışıyor ya da paket bozuk
+      // someone without the code is imitating a device, or the packet is corrupt
     }
   }
 
@@ -196,13 +196,13 @@ class Net extends EventEmitter {
     }
     if (dropped) this.emit('peers');
 
-    // Yayın engelliyse (misafir ağı, güvenlik duvarı) elle girilen adresleri yokla.
+    // Where broadcast is blocked (guest network, firewall), poll manually entered addresses.
     for (const entry of this.store.state.manualPeers) {
       const [host, port] = entry.split(':');
       const target = { host, port: Number(port) || HTTP_PORT };
       this.request(target, 'GET', '/ping')
         .then((r) => (r.ok ? r.json() : null))
-        .then((d) => d && d.v === PROTOCOL && this.upsert(String(d.id), String(d.name || 'Cihaz'), target.host, target.port))
+        .then((d) => d && d.v === PROTOCOL && this.upsert(String(d.id), String(d.name || 'Device'), target.host, target.port))
         .catch(() => {});
     }
   }
@@ -211,7 +211,7 @@ class Net extends EventEmitter {
     return [...this.peers.values()].map(({ id, name, host }) => ({ id, name, host }));
   }
 
-  // ---- Eşitleme ----
+  // ---- Sync ----
 
   async request(peer, method, pathname, data) {
     const { enc } = this.keys();
@@ -225,7 +225,7 @@ class Net extends EventEmitter {
     return {
       ok: res.ok,
       status: res.status,
-      // Yanıt bu isteğe özel mühürlenir; eski bir yanıt tekrar oynatılamaz.
+      // The response is sealed for this request only; an old response cannot be replayed.
       json: async () => JSON.parse(open(enc, Buffer.from(await res.arrayBuffer()), `resp ${nonce}`)),
     };
   }
@@ -235,7 +235,7 @@ class Net extends EventEmitter {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   }
 
-  // Anında bildirim. Ulaşmazsa kısa süre sonra tam eşitleme ile telafi edilir.
+  // Immediate notification. If it does not arrive, a full sync shortly after makes up for it.
   publish(item) {
     for (const peer of this.peers.values()) {
       this.send(peer, '/items', { items: [item] }).catch(() => this.syncSoon(peer.id));
@@ -263,8 +263,8 @@ class Net extends EventEmitter {
     for (const peer of this.peers.values()) this.syncWith(peer);
   }
 
-  // İki yönlü: karşıda olup bizde olmayanı çeker, bizde olup karşıda olmayanı yollar.
-  // Önce yalnızca kimlik listesi alınır; içerik sadece eksikler için taşınır.
+  // Two-way: pulls what the peer has and we lack, pushes what we have and the peer lacks.
+  // Only the id list is fetched first; content travels only for what is missing.
   async syncWith(peer) {
     if (!this.running || this.syncing.has(peer.id)) return;
     this.syncing.add(peer.id);
@@ -290,15 +290,15 @@ class Net extends EventEmitter {
       const extra = this.store.state.items.filter((i) => !theirs.has(i.id) && !tombstones[i.id]);
       for (const items of chunkBySize(extra, PUSH_CHUNK)) await this.send(peer, '/items', { items });
     } catch {
-      // cihaz uykuya geçmiş olabilir; bir sonraki turda tekrar denenir
+      // the device may have gone to sleep; retried on the next round
     } finally {
       this.syncing.delete(peer.id);
     }
   }
 
-  // ---- Dosya aktarımı ----
+  // ---- File transfer ----
 
-  // Öğe başına özet: { [id]: { dir, done, total } }
+  // Per-item summary: { [id]: { dir, done, total } }
   transferState() {
     const out = {};
     for (const t of this.transfers.values()) {
@@ -333,7 +333,7 @@ class Net extends EventEmitter {
     });
   }
 
-  // Öğesi silinmiş aktarımları yarıda kes (ör. aktarım sürerken "tümünü temizle").
+  // Abort transfers whose item was deleted (e.g. "clear all" during a transfer).
   abortOrphans() {
     for (const t of this.transfers.values()) {
       if (!this.store.get(t.id)) t.abort();
@@ -367,7 +367,7 @@ class Net extends EventEmitter {
         headers: { 'x-seal': header },
         signal: ctrl.signal,
       });
-      if (res.status === 404) retry = false; // karşıda da yok; asıl gönderen dönünce gelir
+      if (res.status === 404) retry = false; // the peer does not have it either; it arrives when the original sender returns
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       await pipeline(
         Readable.fromWeb(res.body),
@@ -376,13 +376,13 @@ class Net extends EventEmitter {
         fs.createWriteStream(part),
         { signal: ctrl.signal }
       );
-      if (transfer.done !== item.size) throw new Error('eksik aktarım');
+      if (transfer.done !== item.size) throw new Error('incomplete transfer');
       if (this.store.get(item.id)) {
         await fs.promises.rename(part, dest);
         ok = true;
       }
     } catch {
-      // aşağıda temizlenir ve gerekirse yeniden denenir
+      // cleaned up below and retried if needed
     } finally {
       clearTimeout(stall);
       if (!ok) await fs.promises.rm(part, RM).catch(() => {});
@@ -404,7 +404,7 @@ class Net extends EventEmitter {
     try {
       await pipeline(stream, this.counter(transfer), encryptStream(this.keys().enc, `file ${nonce}`), res);
     } catch {
-      // alıcı bağlantıyı kesti; o tekrar ister
+      // the receiver dropped the connection; it will ask again
     } finally {
       this.transfers.delete(key);
       this.emitProgress(true);
@@ -421,7 +421,7 @@ class Net extends EventEmitter {
       res.end();
     };
 
-    // Başlık açılmadan gövde okunmaz: kodu bilmeyen biri bize veri biriktirtemez.
+    // The body is not read until the header opens: a stranger cannot make us buffer data.
     const auth = this.openHeader(req, pathname);
     if (!auth) return deny();
     const { meta, nonce } = auth;
@@ -435,10 +435,10 @@ class Net extends EventEmitter {
       }
     }
 
-    // İstek atan cihazı da tanı: böylece elle IP girmek tek tarafta yeterli olur.
+    // Also learn about the requesting device, so entering an IP on one side is enough.
     const peer = {
       id: String(meta.id || ''),
-      name: String(meta.name || 'Cihaz'),
+      name: String(meta.name || 'Device'),
       host: (req.socket.remoteAddress || '').replace(/^::ffff:/, ''),
       port: Number(meta.port),
     };
@@ -483,11 +483,11 @@ class Net extends EventEmitter {
 
     if (req.method === 'GET' && pathname.startsWith('/files/')) {
       const id = pathname.slice('/files/'.length);
-      if (!this.store.hasFile(id)) return json(404, { error: 'yok' });
+      if (!this.store.hasFile(id)) return json(404, { error: 'not found' });
       return this.serveFile(res, id, peer, nonce);
     }
 
-    json(404, { error: 'bilinmeyen yol' });
+    json(404, { error: 'unknown path' });
   }
 }
 
@@ -509,7 +509,7 @@ function readBody(req) {
     req.on('data', (c) => {
       size += c.length;
       if (size > MAX_BODY) {
-        reject(new Error('çok büyük'));
+        reject(new Error('too large'));
         req.destroy();
       } else {
         chunks.push(c);

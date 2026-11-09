@@ -199,7 +199,7 @@ textarea {
 .item .meta span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .meta button { font-size: 11px; padding: 2px 8px; }
 
-.empty { margin: auto; text-align: center; color: var(--muted); }
+.empty { margin: auto; text-align: center; color: var(--muted); white-space: pre-line; }
 .empty[hidden] { display: none; }
 
 #settings-view { overflow-y: auto; }

@@ -1,17 +1,17 @@
 {
   "name": "synctray",
   "productName": "SyncTray",
-  "version": "0.1.0",
-  "description": "Cihazlar arasında metin ve dosya paylaşan sistem tepsisi uygulaması",
+  "version": "0.2.0",
+  "description": "Tray app that shares text and files between computers on the same network",
   "main": "src/main.js",
-  "author": "Emre",
+  "author": "dipsiai",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
     "icons": "node scripts/make-icons.js",
     "test": "node scripts/test-sync.js",
     "test:stress": "node scripts/test-stress.js",
-    "dist:mac": "electron-builder --mac",
+    "dist:mac": "electron-builder --mac --arm64 --x64",
     "dist:win": "electron-builder --win --x64"
   },
   "build": {
@@ -22,17 +22,26 @@
     ],
     "mac": {
       "target": "dmg",
+      "icon": "assets/icon.png",
+      "identity": "-",
+      "category": "public.app-category.utilities",
       "extendInfo": {
         "LSUIElement": true
-      }
+      },
+      "hardenedRuntime": false
     },
     "win": {
       "target": "zip",
       "icon": "assets/icon.png"
-    }
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
   },
   "devDependencies": {
     "electron": "^45.2.3",
     "electron-builder": "^26.18.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dipsiai/synctray.git"
   }
 }

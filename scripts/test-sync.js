@@ -1,5 +1,5 @@
-// İki sanal cihazı aynı makinede ayağa kaldırıp eşitlemeyi uçtan uca dener.
-// Çalıştır: npm test
+// End-to-end sync test: starts several virtual devices on this machine.
+// Run: npm test
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -16,7 +16,7 @@ async function until(fn, label, timeout = 8000) {
     if (fn()) return;
     await sleep(50);
   }
-  throw new Error(`zaman aşımı: ${label}`);
+  throw new Error(`timed out: ${label}`);
 }
 
 function device(root, name, code) {
@@ -29,85 +29,85 @@ function device(root, name, code) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'synctray-test-'));
   const a = device(root, 'Mac');
   const b = device(root, 'Windows', a.store.state.code);
-  const stranger = device(root, 'Yabanci'); // farklı eşleşme kodu
+  const stranger = device(root, 'Stranger'); // different pairing code
   const all = [a, b, stranger];
 
   try {
     for (const d of all) await d.net.start();
 
-    // 1. Keşif: önce UDP yayını, olmazsa elle adres
-    let how = 'UDP yayını';
+    // 1. Discovery: UDP broadcast first, manual address as a fallback
+    let how = 'UDP broadcast';
     try {
-      await until(() => a.net.peers.size === 1 && b.net.peers.size === 1, 'keşif', 5000);
+      await until(() => a.net.peers.size === 1 && b.net.peers.size === 1, 'discovery', 5000);
     } catch {
-      how = 'elle adres (bu makinede yayın geri dönmüyor)';
+      how = 'manual address (broadcast does not loop back on this machine)';
       b.store.set({ manualPeers: [`127.0.0.1:${a.net.port}`] });
       b.net.tick();
-      await until(() => a.net.peers.size === 1 && b.net.peers.size === 1, 'elle keşif');
+      await until(() => a.net.peers.size === 1 && b.net.peers.size === 1, 'manual discovery');
     }
-    console.log(`✓ cihazlar birbirini buldu (${how})`);
+    console.log(`✓ devices found each other (${how})`);
 
-    // 2. Metin
+    // 2. Text
     const text = await a.store.addText('const x = 42; // çğıöşü');
     a.net.publish(text);
-    await until(() => b.store.get(text.id), 'metin');
+    await until(() => b.store.get(text.id), 'text');
     assert.strictEqual(b.store.get(text.id).text, text.text);
     assert.strictEqual(b.store.get(text.id).from.name, 'Mac');
-    console.log('✓ metin karşı cihaza ulaştı');
+    console.log('✓ text reached the other device');
 
-    // 3. Dosya (5 MB rastgele veri, içerik özetiyle doğrulanır)
-    const src = path.join(root, 'rapor.bin');
+    // 3. File (5 MB of random data, compared byte for byte)
+    const src = path.join(root, 'report.bin');
     const payload = crypto.randomBytes(5 * 1024 * 1024);
     fs.writeFileSync(src, payload);
     const file = await b.store.addFile(src);
     b.net.publish(file);
-    await until(() => a.store.hasFile(file.id), 'dosya');
+    await until(() => a.store.hasFile(file.id), 'file');
     const got = fs.readFileSync(a.store.filePath(file.id));
-    assert.ok(got.equals(payload), 'dosya içeriği aynı olmalı');
-    assert.strictEqual(a.store.get(file.id).name, 'rapor.bin');
-    console.log('✓ dosya karşı cihaza ulaştı, içerik birebir aynı');
+    assert.ok(got.equals(payload), 'file contents must match');
+    assert.strictEqual(a.store.get(file.id).name, 'report.bin');
+    console.log('✓ file reached the other device, contents identical');
 
-    // 4. Silme
+    // 4. Delete
     const ts = Date.now();
     a.store.remove(text.id, ts);
     a.net.publishDelete(text.id, ts);
-    await until(() => !b.store.get(text.id), 'silme');
-    console.log('✓ silme karşı cihaza yansıdı');
+    await until(() => !b.store.get(text.id), 'delete');
+    console.log('✓ delete propagated to the other device');
 
-    // 5. Sonradan açılan cihaz geçmişi çeker
+    // 5. A device that starts later pulls the history
     const c = device(root, 'Tablet', a.store.state.code);
     all.push(c);
     await c.net.start();
-    if (how !== 'UDP yayını') {
+    if (how !== 'UDP broadcast') {
       c.store.set({ manualPeers: [`127.0.0.1:${a.net.port}`] });
       c.net.tick();
     }
-    await until(() => c.store.hasFile(file.id), 'geç katılan cihaz');
-    assert.ok(!c.store.get(text.id), 'silinen öğe geri gelmemeli');
-    console.log('✓ sonradan açılan cihaz geçmişi ve dosyayı aldı');
+    await until(() => c.store.hasFile(file.id), 'late joiner');
+    assert.ok(!c.store.get(text.id), 'a deleted item must not come back');
+    console.log('✓ late joiner received the history and the file');
 
-    // 5b. Tümünü temizle
-    a.net.publish(await a.store.addText('silinecek'));
-    await until(() => b.store.state.items.length === 2, 'temizlik öncesi');
+    // 5b. Clear all
+    a.net.publish(await a.store.addText('to be deleted'));
+    await until(() => b.store.state.items.length === 2, 'before clear');
     const clearTs = Date.now();
     a.net.publishDelete(a.store.clear(clearTs), clearTs);
-    await until(() => b.store.state.items.length === 0 && c.store.state.items.length === 0, 'tümünü temizle');
-    await until(() => !b.store.hasFile(file.id) && !c.store.hasFile(file.id), 'dosyaların silinmesi');
+    await until(() => b.store.state.items.length === 0 && c.store.state.items.length === 0, 'clear all');
+    await until(() => !b.store.hasFile(file.id) && !c.store.hasFile(file.id), 'file removal');
     assert.strictEqual(a.store.state.items.length, 0);
-    console.log('✓ tümünü temizle her cihazda listeyi ve dosyaları sildi');
+    console.log('✓ clear all removed the list and files on every device');
 
-    // 6. Yetkisiz erişim
-    assert.strictEqual(stranger.net.peers.size, 0, 'farklı kodlu cihaz kimseyi görmemeli');
+    // 6. Unauthorized access
+    assert.strictEqual(stranger.net.peers.size, 0, 'a device with a different code must see nobody');
     assert.ok(!stranger.store.get(file.id));
     const raw = await fetch(`http://127.0.0.1:${a.net.port}/items`);
     assert.strictEqual(raw.status, 401);
     const forged = await stranger.net.request({ host: '127.0.0.1', port: a.net.port }, 'GET', '/items');
     assert.strictEqual(forged.status, 401);
-    console.log('✓ eşleşme kodunu bilmeyen cihaz reddedildi');
+    console.log('✓ device without the pairing code was rejected');
 
-    console.log('\nTüm testler geçti.');
+    console.log('\nAll tests passed.');
   } catch (err) {
-    console.error('\n✗ TEST BAŞARISIZ:', err.message);
+    console.error('\n✗ TEST FAILED:', err.message);
     process.exitCode = 1;
   } finally {
     for (const d of all) d.net.stop();

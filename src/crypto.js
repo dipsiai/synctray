@@ -1,9 +1,9 @@
-// Cihazlar arası trafiğin şifrelenmesi. Yalnızca Node'un kendi crypto modülünü kullanır.
+// Encryption of traffic between devices. Uses only Node's built-in crypto module.
 //
-// - Anahtar eşleşme kodundan scrypt ile türetilir (yavaş olması kod tahminini pahalılaştırır).
-// - Her mesaj AES-256-GCM ile mühürlenir: içerik hem gizlenir hem de değiştirilirse fark edilir.
-// - Dosyalar 64 KB'lık parçalar hâlinde, aktarıma özel bir anahtarla şifrelenir; parçaların
-//   sırası ve dosyanın sonu da doğrulanır (araya girip kesmek ya da yer değiştirmek anlaşılır).
+// - The key is derived from the pairing code with scrypt (slow on purpose, so guessing codes is costly).
+// - Every message is sealed with AES-256-GCM: contents are hidden and any tampering is detected.
+// - Files are encrypted in 64 KB chunks with a per-transfer key; chunk order and the end of the
+//   file are authenticated too, so cutting a stream short or reordering it is detected.
 const crypto = require('crypto');
 const { Transform } = require('stream');
 
@@ -11,7 +11,7 @@ const CHUNK = 64 * 1024;
 const NONCE = 12;
 const TAG = 16;
 const SALT = 16;
-const FRAME_HEAD = 5; // 4 bayt uzunluk + 1 bayt "son parça" işareti
+const FRAME_HEAD = 5; // 4-byte length + 1-byte "last chunk" flag
 
 function deriveKeys(code) {
   const master = crypto.scryptSync(code, 'synctray/v3', 32, { N: 1 << 15, r: 8, p: 1, maxmem: 128 * 1024 * 1024 });
@@ -26,22 +26,22 @@ function encrypt(key, nonce, plain, aad) {
 }
 
 function decrypt(key, nonce, sealed, aad) {
-  if (sealed.length < TAG) throw new Error('bozuk veri');
+  if (sealed.length < TAG) throw new Error('corrupt data');
   const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
   decipher.setAAD(Buffer.from(aad));
   decipher.setAuthTag(sealed.subarray(sealed.length - TAG));
   return Buffer.concat([decipher.update(sealed.subarray(0, sealed.length - TAG)), decipher.final()]);
 }
 
-// Tek mesaj: [nonce | şifreli içerik | etiket]. `aad` mesajın bağlamıdır; başka bir
-// bağlamda (başka istek, başka yol) aynı mesaj açılamaz.
+// One message: [nonce | ciphertext | tag]. `aad` is the message's context; the same message
+// cannot be opened in another context (a different request or path).
 function seal(key, plain, aad) {
   const nonce = crypto.randomBytes(NONCE);
   return Buffer.concat([nonce, encrypt(key, nonce, Buffer.from(plain), aad)]);
 }
 
 function open(key, box, aad) {
-  if (!Buffer.isBuffer(box) || box.length < NONCE + TAG) throw new Error('bozuk veri');
+  if (!Buffer.isBuffer(box) || box.length < NONCE + TAG) throw new Error('corrupt data');
   return decrypt(key, box.subarray(0, NONCE), box.subarray(NONCE), aad);
 }
 
@@ -53,7 +53,7 @@ function frameNonce(index) {
   return nonce;
 }
 
-// Akış biçimi: [16 bayt tuz] sonra parçalar: [uzunluk u32 | son? u8 | şifreli parça + etiket]
+// Stream format: [16-byte salt] then frames: [length u32 | last? u8 | encrypted chunk + tag]
 function encryptStream(key, aad) {
   const salt = crypto.randomBytes(SALT);
   const k = fileKey(key, salt);
@@ -76,7 +76,7 @@ function encryptStream(key, aad) {
         this.push(salt);
       }
       pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
-      // Son parçayı flush'a bırak: hangisinin son olduğu ancak orada bilinir.
+      // Leave the last chunk to flush: only there do we know which one is last.
       while (pending.length > CHUNK) {
         this.push(frame(pending.subarray(0, CHUNK), false));
         pending = pending.subarray(CHUNK);
@@ -107,24 +107,24 @@ function decryptStream(key, aad) {
           buffer = buffer.subarray(SALT);
         }
         while (buffer.length >= FRAME_HEAD) {
-          if (finished) throw new Error('son parçadan sonra veri');
+          if (finished) throw new Error('data after the final chunk');
           const length = buffer.readUInt32BE(0);
           const final = buffer[4] === 1;
-          if (length < TAG || length > CHUNK + TAG) throw new Error('bozuk parça');
+          if (length < TAG || length > CHUNK + TAG) throw new Error('corrupt chunk');
           if (buffer.length < FRAME_HEAD + length) break;
           const sealed = buffer.subarray(FRAME_HEAD, FRAME_HEAD + length);
           this.push(decrypt(k, frameNonce(index++), sealed, `${aad} ${final ? 1 : 0}`));
           buffer = buffer.subarray(FRAME_HEAD + length);
           finished = final;
         }
-        if (finished && buffer.length) throw new Error('son parçadan sonra veri');
+        if (finished && buffer.length) throw new Error('data after the final chunk');
         done();
       } catch (err) {
         done(err);
       }
     },
     flush(done) {
-      done(finished ? null : new Error('akış yarıda kesildi'));
+      done(finished ? null : new Error('stream ended early'));
     },
   });
 }

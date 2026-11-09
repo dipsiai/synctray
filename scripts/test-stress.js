@@ -1,5 +1,5 @@
-// Zorlama testleri: hata çıkarması muhtemel durumları dener. Çalıştır: npm run test:stress
-// Her adım bağımsız raporlanır; biri başarısız olsa da diğerleri çalışır.
+// Stress tests for the situations most likely to break. Run: npm run test:stress
+// Each step is reported on its own; one failure does not stop the rest.
 const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
@@ -22,7 +22,7 @@ async function until(fn, label, timeout = 10000) {
     if (await fn()) return;
     await sleep(40);
   }
-  throw new Error(`zaman aşımı: ${label}`);
+  throw new Error(`timed out: ${label}`);
 }
 
 function device(root, name, code) {
@@ -50,7 +50,7 @@ async function makeFile(file, megabytes) {
   const out = fs.createWriteStream(file);
   const block = crypto.randomBytes(MB);
   for (let i = 0; i < megabytes; i++) {
-    block.writeUInt32LE(i, 0); // bloklar birbirinden farklı olsun
+    block.writeUInt32LE(i, 0); // make every block different
     if (!out.write(block)) await new Promise((r) => out.once('drain', r));
   }
   await new Promise((r) => out.end(r));
@@ -82,24 +82,24 @@ const leftovers = (d) => fs.readdirSync(d.store.filesDir);
       const ts = Date.now();
       d.net.publishDelete(d.store.clear(ts), ts);
     }
-    await until(() => !a.store.state.items.length && !b.store.state.items.length, 'sıfırlama');
+    await until(() => !a.store.state.items.length && !b.store.state.items.length, 'reset');
     await sleep(200);
   }
 
   try {
     await a.net.start();
     await b.net.start();
-    await until(() => connected(a, b), 'ilk bağlantı');
+    await until(() => connected(a, b), 'first connection');
 
-    await step('300 metin art arda gönderilince iki liste aynı oluyor', async () => {
-      for (let i = 0; i < 300; i++) a.net.publish(await a.store.addText(`satır ${i}`));
-      await until(() => ids(a) === ids(b), 'listeler eşitlenmedi', 20000);
-      assert.strictEqual(a.store.state.items[0].text, 'satır 299', 'en yeni öğe en üstte olmalı');
-      return `${a.store.state.items.length} öğe tutuldu`;
+    await step('300 texts sent in a burst leave both lists identical', async () => {
+      for (let i = 0; i < 300; i++) a.net.publish(await a.store.addText(`line ${i}`));
+      await until(() => ids(a) === ids(b), 'lists did not converge', 20000);
+      assert.strictEqual(a.store.state.items[0].text, 'line 299', 'newest item must be on top');
+      return `${a.store.state.items.length} items kept`;
     });
 
     await reset();
-    await step('iki cihaz aynı anda 100\'er metin gönderince listeler aynı oluyor', async () => {
+    await step('both devices sending 100 texts at once leave both lists identical', async () => {
       await Promise.all(
         [a, b].map(async (d) => {
           for (let i = 0; i < 100; i++) {
@@ -108,66 +108,66 @@ const leftovers = (d) => fs.readdirSync(d.store.filesDir);
           }
         })
       );
-      await until(() => ids(a) === ids(b), 'listeler eşitlenmedi', 45000);
+      await until(() => ids(a) === ids(b), 'lists did not converge', 45000);
     });
 
     await reset();
-    await step('5 MB\'lık dev metin karşıya ulaşıyor', async () => {
+    await step('a huge 5 MB text reaches the other device', async () => {
       const big = 'x'.repeat(5 * MB);
       const item = await a.store.addText(big);
       a.net.publish(item);
-      await until(() => b.store.get(item.id) && (item.type === 'text' || b.store.hasFile(item.id)), 'dev metin gelmedi', 12000);
-      return item.type === 'file' ? `dosyaya çevrildi: ${item.name}` : 'metin olarak';
+      await until(() => b.store.get(item.id) && (item.type === 'text' || b.store.hasFile(item.id)), 'huge text did not arrive', 12000);
+      return item.type === 'file' ? `converted to a file: ${item.name}` : 'as text';
     });
 
     await reset();
-    await step('karşı cihaz kapalıyken gönderilenler açılınca geliyor', async () => {
+    await step('items sent while the other device is off arrive when it starts', async () => {
       b.net.stop();
       await sleep(300);
-      for (let i = 0; i < 5; i++) a.net.publish(await a.store.addText(`çevrimdışı ${i}`));
-      const src = path.join(root, 'kucuk.bin');
+      for (let i = 0; i < 5; i++) a.net.publish(await a.store.addText(`offline ${i}`));
+      const src = path.join(root, 'small.bin');
       const hash = await makeFile(src, 3);
       const file = await a.store.addFile(src);
       a.net.publish(file);
       await restart(b);
-      await until(() => ids(a) === ids(b) && b.store.hasFile(file.id), 'açılınca eşitlenmedi', 15000);
+      await until(() => ids(a) === ids(b) && b.store.hasFile(file.id), 'did not sync after start', 15000);
       assert.strictEqual(await hashFile(b.store.filePath(file.id)), hash);
     });
 
-    await step('ağdan yakalanan başlıkla sahte içerik eklenemiyor', async () => {
+    await step('a captured header cannot be used to inject content', async () => {
       const url = (p) => `http://127.0.0.1:${b.net.port}${p}`;
-      const fake = { id: crypto.randomUUID(), type: 'text', text: 'SAHTE', from: { id: 'x', name: 'Saldırgan' }, ts: Date.now() };
+      const fake = { id: crypto.randomUUID(), type: 'text', text: 'FORGED', from: { id: 'x', name: 'Attacker' }, ts: Date.now() };
       const payload = JSON.stringify({ items: [fake] });
       const post = (p, header, body) => fetch(url(p), { method: 'POST', headers: { 'x-seal': header }, body });
 
-      // 1) geçerli başlık + düz metin gövde
+      // 1) valid header + plaintext body
       const h1 = a.net.sealHeader('POST', '/items');
       assert.strictEqual((await post('/items', h1.header, payload)).status, 401);
-      // 2) geçerli başlık + başka bir isteğe ait (geçerli anahtarla mühürlü) gövde
+      // 2) valid header + a body sealed (with the right key) for another request
       const h2 = a.net.sealHeader('POST', '/items');
       const otherBody = seal(a.net.keys().enc, payload, `body ${h1.nonce}`);
       assert.strictEqual((await post('/items', h2.header, otherBody)).status, 401);
-      // 3) başka yol için alınmış başlığı silme isteğinde kullanma
+      // 3) a header issued for another path used on a delete request
       const h3 = a.net.sealHeader('GET', '/index');
       assert.strictEqual((await post('/delete', h3.header, payload)).status, 401);
-      // 4) yanlış kodla mühürlenmiş istek
-      const wrong = deriveKeys('YANLISKOD123');
+      // 4) a request sealed with the wrong code
+      const wrong = deriveKeys('WRONGCODE123');
       const box = seal(wrong.enc, JSON.stringify({ ts: Date.now(), id: 'x', name: 'x', port: 1 }), 'req POST /items');
       assert.strictEqual((await post('/items', box.toString('base64'), seal(wrong.enc, payload, 'body x'))).status, 401);
 
-      assert.ok(!b.store.get(fake.id), 'sahte öğe listeye girdi');
+      assert.ok(!b.store.get(fake.id), 'forged item was accepted');
     });
 
     await reset();
-    await step('ağdan geçen hiçbir şey okunamıyor (metin, dosya, cihaz adı)', async () => {
-      const SECRET = 'COK-GIZLI-PAROLA-918273';
-      const text = await a.store.addText(`parolam: ${SECRET}`);
-      const file = await a.store.addBuffer('gizli.txt', Buffer.from(`${SECRET}\n`.repeat(5000)));
+    await step('nothing on the wire is readable (text, files, device name)', async () => {
+      const SECRET = 'TOP-SECRET-PASSWORD-918273';
+      const text = await a.store.addText(`my password: ${SECRET}`);
+      const file = await a.store.addBuffer('secret.txt', Buffer.from(`${SECRET}\n`.repeat(5000)));
       a.net.publish(text);
       a.net.publish(file);
-      await until(() => b.store.hasFile(file.id), 'öğeler gelmedi');
+      await until(() => b.store.hasFile(file.id), 'items did not arrive');
 
-      // Ağı dinleyen birinin göreceği ham baytlar: b'nin a'ya attığı isteklerin gövdesi ve yanıtları
+      // The raw bytes an eavesdropper would see: bodies of requests from b to a, and the responses
       const captured = [];
       const raw = async (method, p, data) => {
         const { header, nonce } = b.net.sealHeader(method, p);
@@ -183,7 +183,7 @@ const leftovers = (d) => fs.readdirSync(d.store.filesDir);
       await raw('GET', `/files/${file.id}`);
       await raw('POST', '/items', { items: [text] });
 
-      // Yayın paketi
+      // Broadcast packet
       const sock = dgram.createSocket({ type: 'udp4', reuseAddr: true });
       const packet = new Promise((resolve) => sock.once('message', resolve));
       await new Promise((r) => sock.bind(47801, r));
@@ -192,14 +192,14 @@ const leftovers = (d) => fs.readdirSync(d.store.filesDir);
       sock.close();
 
       const wire = Buffer.concat(captured).toString('latin1');
-      assert.ok(wire.length > 100000, 'yakalanan veri beklenenden az');
-      for (const needle of [SECRET, 'parolam', 'gizli.txt', a.store.state.deviceName, a.store.state.deviceId, text.id]) {
-        assert.ok(!wire.includes(needle), `ağda açık görünüyor: ${needle}`);
+      assert.ok(wire.length > 100000, 'captured less data than expected');
+      for (const needle of [SECRET, 'my password', 'secret.txt', a.store.state.deviceName, a.store.state.deviceId, text.id]) {
+        assert.ok(!wire.includes(needle), `visible in clear on the wire: ${needle}`);
       }
-      return `${Math.round(wire.length / 1024)} KB ham veri tarandı`;
+      return `${Math.round(wire.length / 1024)} KB of raw data scanned`;
     });
 
-    await step('şifreli dosya akışı: bozulma, kesilme ve yanlış anahtar fark ediliyor', async () => {
+    await step('encrypted file stream: tampering, truncation and a wrong key are detected', async () => {
       const key = deriveKeys('TESTKODU1234').enc;
       const plain = crypto.randomBytes(200 * 1024 + 123);
       const collect = async (source, ...transforms) => {
@@ -211,23 +211,23 @@ const leftovers = (d) => fs.readdirSync(d.store.filesDir);
       const sealed = await collect([plain.subarray(0, 70000), plain.subarray(70000)], encryptStream(key, 'file t'));
       const piecemeal = function* (buf, n) { for (let i = 0; i < buf.length; i += n) yield buf.subarray(i, i + n); };
 
-      assert.ok((await collect(piecemeal(sealed, 1000), decryptStream(key, 'file t'))).equals(plain), 'açılan veri farklı');
+      assert.ok((await collect(piecemeal(sealed, 1000), decryptStream(key, 'file t'))).equals(plain), 'decrypted data differs');
       const empty = await collect([], encryptStream(key, 'file e'));
-      assert.strictEqual((await collect([empty], decryptStream(key, 'file e'))).length, 0, 'boş dosya');
+      assert.strictEqual((await collect([empty], decryptStream(key, 'file e'))).length, 0, 'empty file');
 
       const fails = async (label, data, k = key, aad = 'file t') => {
-        await assert.rejects(collect([data], decryptStream(k, aad)), undefined, `${label} fark edilmedi`);
+        await assert.rejects(collect([data], decryptStream(k, aad)), undefined, `${label} went undetected`);
       };
       const flipped = Buffer.from(sealed);
       flipped[100000] ^= 1;
-      await fails('tek bit değişikliği', flipped);
-      await fails('sondan kesilme', sealed.subarray(0, sealed.length - 70000));
-      await fails('tam parça sınırından kesilme', sealed.subarray(0, 16 + 5 + 65536 + 16));
-      await fails('yanlış anahtar', sealed, deriveKeys('BASKAKOD9999').enc);
-      await fails('başka isteğe ait akış', sealed, key, 'file baska');
+      await fails('single flipped bit', flipped);
+      await fails('truncated end', sealed.subarray(0, sealed.length - 70000));
+      await fails('truncation exactly on a chunk boundary', sealed.subarray(0, 16 + 5 + 65536 + 16));
+      await fails('wrong key', sealed, deriveKeys('OTHERCODE999').enc);
+      await fails('stream from another request', sealed, key, 'file other');
     });
 
-    await step('tehlikeli dosya adları ve eski öğeler süzülüyor', async () => {
+    await step('dangerous file names and expired items are filtered', async () => {
       const mk = (extra) => ({ id: crypto.randomUUID(), type: 'file', size: 1, from: { id: 'x', name: 'y' }, ts: Date.now(), ...extra });
       const evil = mk({ name: '..\\..\\Windows\\evil.exe' });
       const evil2 = mk({ name: '../../.ssh/authorized_keys' });
@@ -235,17 +235,17 @@ const leftovers = (d) => fs.readdirSync(d.store.filesDir);
       b.store.addRemote(evil2);
       assert.strictEqual(b.store.get(evil.id).name, 'evil.exe');
       assert.strictEqual(b.store.get(evil2.id).name, 'authorized_keys');
-      const old = mk({ name: 'eski.txt', ts: Date.now() - 30 * 24 * 3600 * 1000 });
-      assert.strictEqual(b.store.addRemote(old), false, 'süresi dolmuş öğe kabul edildi');
+      const old = mk({ name: 'old.txt', ts: Date.now() - 30 * 24 * 3600 * 1000 });
+      assert.strictEqual(b.store.addRemote(old), false, 'expired item was accepted');
       b.store.remove(evil.id);
       b.store.remove(evil2.id);
     });
 
     await reset();
-    const bigSrc = path.join(root, 'buyuk.bin');
+    const bigSrc = path.join(root, 'big.bin');
     const bigHash = await makeFile(bigSrc, 300);
 
-    await step('300 MB dosya birebir ulaşıyor, iki tarafta da ilerleme bildiriliyor', async () => {
+    await step('a 300 MB file arrives intact, with progress reported on both sides', async () => {
       const seen = { in: 0, out: 0 };
       const watch = (d) => () => {
         for (const t of Object.values(d.net.transferState())) seen[t.dir] = Math.max(seen[t.dir], t.done / t.total);
@@ -256,76 +256,76 @@ const leftovers = (d) => fs.readdirSync(d.store.filesDir);
       b.net.on('progress', wb);
       const file = await a.store.addFile(bigSrc);
       a.net.publish(file);
-      await until(() => b.store.hasFile(file.id), 'dosya gelmedi', 60000);
+      await until(() => b.store.hasFile(file.id), 'file did not arrive', 60000);
       a.net.off('progress', wa);
       b.net.off('progress', wb);
-      assert.strictEqual(await hashFile(b.store.filePath(file.id)), bigHash, 'içerik farklı');
-      assert.ok(seen.in > 0, 'alıcıda ilerleme bildirilmedi');
-      assert.ok(seen.out > 0, 'gönderende ilerleme bildirilmedi');
-      await until(() => !Object.keys(a.net.transferState()).length && !Object.keys(b.net.transferState()).length, 'aktarım kaydı temizlenmedi', 3000);
+      assert.strictEqual(await hashFile(b.store.filePath(file.id)), bigHash, 'contents differ');
+      assert.ok(seen.in > 0, 'no progress reported on the receiver');
+      assert.ok(seen.out > 0, 'no progress reported on the sender');
+      await until(() => !Object.keys(a.net.transferState()).length && !Object.keys(b.net.transferState()).length, 'transfer record was not cleared', 3000);
     });
 
     await reset();
-    await step('aktarım ortasında alıcı kapanıp açılınca dosya tamamlanıyor', async () => {
+    await step('receiver restarting mid-transfer still ends with the complete file', async () => {
       b.net.once('progress', () => b.net.stop());
       const file = await a.store.addFile(bigSrc);
       a.net.publish(file);
       await sleep(1500);
-      assert.ok(!b.store.hasFile(file.id), 'yarım dosya tamamlanmış sayıldı');
+      assert.ok(!b.store.hasFile(file.id), 'partial file was treated as complete');
       await restart(b);
-      await until(() => b.store.hasFile(file.id), 'yeniden açılınca tamamlanmadı', 60000);
-      assert.strictEqual(await hashFile(b.store.filePath(file.id)), bigHash, 'içerik farklı');
-      assert.deepStrictEqual(leftovers(b), [file.id], 'yarım dosya artığı kaldı');
+      await until(() => b.store.hasFile(file.id), 'did not complete after restart', 60000);
+      assert.strictEqual(await hashFile(b.store.filePath(file.id)), bigHash, 'contents differ');
+      assert.deepStrictEqual(leftovers(b), [file.id], 'partial file left behind');
     });
 
     await reset();
-    await step('aktarım ortasında gönderen kapanıp açılınca dosya tamamlanıyor', async () => {
+    await step('sender restarting mid-transfer still ends with the complete file', async () => {
       b.net.once('progress', () => a.net.stop());
       const file = await a.store.addFile(bigSrc);
       a.net.publish(file);
       await sleep(1500);
-      assert.ok(!b.store.hasFile(file.id), 'yarım dosya tamamlanmış sayıldı');
-      await until(() => !Object.keys(b.net.transferState()).length, 'alıcıda aktarım askıda kaldı', 5000);
+      assert.ok(!b.store.hasFile(file.id), 'partial file was treated as complete');
+      await until(() => !Object.keys(b.net.transferState()).length, 'transfer left hanging on the receiver', 5000);
       await restart(a);
-      await until(() => b.store.hasFile(file.id), 'gönderen dönünce tamamlanmadı', 60000);
-      assert.strictEqual(await hashFile(b.store.filePath(file.id)), bigHash, 'içerik farklı');
+      await until(() => b.store.hasFile(file.id), 'did not complete after the sender returned', 60000);
+      assert.strictEqual(await hashFile(b.store.filePath(file.id)), bigHash, 'contents differ');
     });
 
     await reset();
-    await step('gönderen sessizce donarsa (uyku) aktarım askıda kalmıyor', async () => {
-      // Başlıkları ve ilk parçayı yollayıp sonra susan sahte bir cihaz
+    await step('a sender that silently freezes (sleep) does not leave the transfer hanging', async () => {
+      // A fake device that sends headers and a few bytes, then goes silent
       const frozen = http.createServer((req, res) => {
         res.writeHead(200);
         res.write(Buffer.alloc(10));
       });
       await new Promise((r) => frozen.listen(0, r));
-      const item = { id: crypto.randomUUID(), type: 'file', name: 'donuk.bin', size: 50 * MB, from: { id: 'f', name: 'Donuk' }, ts: Date.now() };
+      const item = { id: crypto.randomUUID(), type: 'file', name: 'frozen.bin', size: 50 * MB, from: { id: 'f', name: 'Frozen' }, ts: Date.now() };
       b.store.addRemote(item);
       b.net.stallMs = 1500;
       b.net.fetchFile({ id: 'f', host: '127.0.0.1', port: frozen.address().port }, b.store.get(item.id));
       await sleep(300);
-      assert.ok(Object.keys(b.net.transferState()).length, 'aktarım başlamadı');
-      await until(() => !Object.keys(b.net.transferState()).length, 'donmuş aktarım bırakılmadı', 6000);
-      assert.ok(!leftovers(b).some((f) => f.startsWith(item.id)), 'yarım dosya artığı kaldı');
+      assert.ok(Object.keys(b.net.transferState()).length, 'transfer did not start');
+      await until(() => !Object.keys(b.net.transferState()).length, 'frozen transfer was not abandoned', 6000);
+      assert.ok(!leftovers(b).some((f) => f.startsWith(item.id)), 'partial file left behind');
       frozen.closeAllConnections();
       frozen.close();
       b.store.remove(item.id);
     });
 
     await reset();
-    await step('aktarım sırasında "tümünü temizle" artık bırakmıyor', async () => {
+    await step('"clear all" during a transfer leaves nothing behind', async () => {
       b.net.once('progress', () => {
         const ts = Date.now();
         a.net.publishDelete(a.store.clear(ts), ts);
       });
       const file = await a.store.addFile(bigSrc);
       a.net.publish(file);
-      await until(() => !a.store.state.items.length && !b.store.state.items.length, 'temizlenmedi', 10000);
-      await until(() => !leftovers(a).length && !leftovers(b).length, `artık dosya kaldı: A=${leftovers(a)} B=${leftovers(b)}`, 10000);
+      await until(() => !a.store.state.items.length && !b.store.state.items.length, 'not cleared', 10000);
+      await until(() => !leftovers(a).length && !leftovers(b).length, `files left behind: A=${leftovers(a)} B=${leftovers(b)}`, 10000);
     });
   } catch (err) {
     results.push(false);
-    console.error('\n✗ BEKLENMEYEN HATA:', err.message);
+    console.error('\n✗ UNEXPECTED ERROR:', err.message);
   } finally {
     a.net.stop();
     b.net.stop();
@@ -334,6 +334,6 @@ const leftovers = (d) => fs.readdirSync(d.store.filesDir);
   }
 
   const failed = results.filter((ok) => !ok).length;
-  console.log(failed ? `\n${failed} adım başarısız.` : '\nTüm zorlama testleri geçti.');
+  console.log(failed ? `\n${failed} step(s) failed.` : '\nAll stress tests passed.');
   process.exitCode = failed ? 1 : 0;
 })();
