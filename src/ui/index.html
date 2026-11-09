@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'">
+  <title>SyncTray</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body>
+  <header>
+    <div class="status" id="status"><span class="dot"></span><span id="status-text">Cihaz aranıyor…</span></div>
+    <button class="icon-btn" id="pin" title="Pencereyi sabitle (başka yere tıklayınca kapanmaz)">Sabitle</button>
+    <button class="icon-btn" id="settings-btn" title="Ayarlar">Ayarlar</button>
+  </header>
+
+  <main id="main-view">
+    <section class="composer" id="composer">
+      <textarea id="input" placeholder="Metni buraya yapıştır ya da dosya sürükle…" spellcheck="false"></textarea>
+      <div class="row">
+        <button id="pick">Dosya seç</button>
+        <span class="hint" id="send-hint"></span>
+        <button class="primary" id="send" disabled>Gönder</button>
+      </div>
+    </section>
+    <div class="list-head" id="list-head" hidden>
+      <span id="list-count"></span>
+      <button id="clear-all">Tümünü temizle</button>
+    </div>
+    <ul id="list"></ul>
+    <p class="empty" id="empty">Henüz bir şey paylaşılmadı.<br>Yukarıya bir metin yapıştır ya da dosya bırak.</p>
+  </main>
+
+  <main id="settings-view" hidden>
+    <label>Bu cihazın adı
+      <input id="device-name" maxlength="40">
+    </label>
+    <label>Eşleşme kodu
+      <input id="device-code" class="mono" maxlength="20" spellcheck="false">
+    </label>
+    <p class="note">Aynı kodu girdiğin cihazlar birbirini görür. Diğer bilgisayarda bu kodu yaz.</p>
+
+    <h2>Bağlı cihazlar</h2>
+    <ul class="plain" id="peer-list"></ul>
+
+    <h2>Cihaz otomatik bulunmazsa</h2>
+    <p class="note">Bu cihazın adresi: <span class="mono" id="addresses"></span><br>Diğer cihazın adresini buraya yaz:</p>
+    <div class="row">
+      <input id="manual-input" class="mono" placeholder="192.168.1.25" spellcheck="false">
+      <button id="manual-add">Ekle</button>
+    </div>
+    <ul class="plain" id="manual-list"></ul>
+
+    <div class="row end">
+      <button id="quit">SyncTray'den çık</button>
+      <button class="primary" id="settings-done">Tamam</button>
+    </div>
+  </main>
+
+  <div id="toast" hidden></div>
+  <script src="ui.js"></script>
+</body>
+</html>

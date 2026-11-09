@@ -1,0 +1,38 @@
+{
+  "name": "synctray",
+  "productName": "SyncTray",
+  "version": "0.1.0",
+  "description": "Cihazlar arasında metin ve dosya paylaşan sistem tepsisi uygulaması",
+  "main": "src/main.js",
+  "author": "Emre",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "icons": "node scripts/make-icons.js",
+    "test": "node scripts/test-sync.js",
+    "test:stress": "node scripts/test-stress.js",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.emre.synctray",
+    "files": [
+      "src/**",
+      "assets/**"
+    ],
+    "mac": {
+      "target": "dmg",
+      "extendInfo": {
+        "LSUIElement": true
+      }
+    },
+    "win": {
+      "target": "zip",
+      "icon": "assets/icon.png"
+    }
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
+  }
+}
