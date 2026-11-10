@@ -1,7 +1,7 @@
 {
   "name": "synctray",
   "productName": "SyncTray",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Tray app that shares text and files between computers on the same network",
   "main": "src/main.js",
   "author": "dipsiai",
