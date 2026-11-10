@@ -53,7 +53,8 @@ async function init() {
   net.on('incoming', notifyIncoming);
   net.on('progress', () => send('progress', net.transferState()));
   setInterval(() => store.expire(), 3600 * 1000);
-  await net.start();
+  if (!store.state.asleep) await net.start();
+  paintTray();
   registerShortcuts();
   app.on('will-quit', () => globalShortcut.unregisterAll());
   pushState();
@@ -103,21 +104,38 @@ function announce(message) {
   if (Notification.isSupported()) new Notification({ title: 'SyncTray', body: message, silent: true }).show();
 }
 
+// Sleep mode: the network is fully off (no broadcasts, no open port, no timers) until woken.
+// Remembered across restarts. Toggles are queued so a quick double click cannot overlap.
+let sleepQueue = Promise.resolve();
+function setAsleep(asleep) {
+  asleep = Boolean(asleep);
+  store.set({ asleep });
+  paintTray();
+  sleepQueue = sleepQueue
+    .then(() => (store.state.asleep ? net.sleep() : net.wake()))
+    .catch(() => {})
+    .then(pushState);
+  return sleepQueue;
+}
+
+const paintTray = () => tray.setToolTip(store.state.asleep ? `SyncTray (${t('asleep')})` : 'SyncTray');
+const sentText = () => t(store.state.asleep ? 'sentLater' : 'sent');
+
 async function sendClipboard() {
   const files = clipboardFiles().filter((p) => fs.existsSync(p));
   if (files.length) {
     await addFiles(files);
-    return announce(t('sent'));
+    return announce(sentText());
   }
   const text = clipboard.readText();
   if (text.trim()) {
     await addText(text);
-    return announce(t('sent'));
+    return announce(sentText());
   }
   const image = clipboard.readImage();
   if (!image.isEmpty()) {
     net.publish(await store.addBuffer('clipboard.png', image.toPNG()));
-    return announce(t('sent'));
+    return announce(sentText());
   }
   announce(t('clipboardEmpty'));
 }
@@ -202,6 +220,12 @@ function trayMenu() {
       accelerator: shortcuts().send || undefined,
       click: sendClipboard,
     },
+    {
+      label: t('traySleep'),
+      type: 'checkbox',
+      checked: Boolean(store.state.asleep),
+      click: (item) => setAsleep(item.checked),
+    },
     { type: 'separator' },
     {
       label: t('trayAutostart'),
@@ -252,6 +276,7 @@ function getState() {
     },
     manualPeers: store.state.manualPeers,
     pinned: store.state.pinned,
+    asleep: Boolean(store.state.asleep),
     transfers: net.transferState(),
     shortcuts: shortcuts(),
     isMac,
@@ -287,7 +312,7 @@ async function addText(text) {
   try {
     const item = await store.addText(text);
     net.publish(item);
-    toast(t(item.type === 'file' ? 'sentAsFile' : 'sent'));
+    toast(item.type === 'file' ? t('sentAsFile') : sentText());
   } catch (err) {
     toast(t('sendFailed', { error: err.message }));
   }
@@ -468,6 +493,7 @@ function registerIpc() {
     'remove-manual-peer': (address) => {
       store.set({ manualPeers: store.state.manualPeers.filter((p) => p !== address) });
     },
+    'set-asleep': (asleep) => setAsleep(asleep),
     'set-pinned': (pinned) => store.set({ pinned: Boolean(pinned) }),
     hide: () => hideWindow(),
     quit: () => quit(),

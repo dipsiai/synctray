@@ -2,7 +2,7 @@
 // Everything on the wire (requests, responses, files, device names) is encrypted with a key
 // derived from the pairing code; see crypto.js.
 // If internet sync is ever added, this is the only file that should need to change. Its public
-// surface is start / stop / publish / publishDelete / peerList / transferState
+// surface is start / stop / sleep / wake / publish / publishDelete / peerList / transferState
 // and the 'peers', 'incoming' and 'progress' events.
 const { EventEmitter } = require('events');
 const http = require('http');
@@ -133,13 +133,31 @@ class Net extends EventEmitter {
     this.retries.clear();
     clearTimeout(this.progressTimer);
     for (const t of this.transfers.values()) t.abort();
-    this.server?.close();
-    this.server?.closeAllConnections?.();
+    const { server } = this;
+    const closed = new Promise((resolve) => (server ? server.close(() => resolve()) : resolve()));
+    server?.closeAllConnections?.();
     try {
       this.udp?.close();
     } catch {
       // already closed
     }
+    this.server = null;
+    this.udp = null;
+    return closed; // resolves once the port is free again
+  }
+
+  // Sleep: nothing is sent, nothing listens, no timers run. wake() is start().
+  // Items added meanwhile stay local and reach the others on the first sync after waking.
+  async sleep() {
+    if (!this.running) return;
+    await this.stop();
+    this.peers.clear();
+    this.syncing.clear();
+    this.emit('peers');
+  }
+
+  async wake() {
+    if (!this.running) await this.start();
   }
 
   // When the pairing code changes, forget the devices of the old group.
@@ -433,7 +451,7 @@ class Net extends EventEmitter {
   // Link for the QR code. The key sits in the fragment, so it never leaves the phone.
   webLink() {
     const [ip] = this.localIPs();
-    return ip ? `http://${ip.address}:${this.port}/m#${this.keys().web.toString('base64url')}` : null;
+    return ip && this.running ? `http://${ip.address}:${this.port}/m#${this.keys().web.toString('base64url')}` : null;
   }
 
   serveStatic(res, pathname) {

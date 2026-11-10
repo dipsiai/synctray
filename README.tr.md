@@ -16,6 +16,7 @@ Bir bilgisayarda metni yapıştır ya da dosyayı bırak, diğerinde tepsiyi aç
 - Son 50 öğeyi 7 gün saklar; "tümünü temizle" bütün cihazlarda siler
 - Telefon ve tabletler QR kod okutarak tarayıcıdan katılır, uygulama kurmak gerekmez
 - Genel kısayollar: her uygulamadan pencereyi aç ya da panoyu gönder
+- Uyut düğmesi: uyandırana kadar ağı tamamen kapatır
 - Arayüz sistem diline göre Türkçe ya da İngilizce açılır
 - Electron dışında iki küçük bağımlılık (`@noble/ciphers`, `qrcode-generator`)
 
@@ -44,6 +45,8 @@ Bulamazlarsa (bazı modemler ve misafir ağları yayını engeller) Ayarlar'da g
 **Kısayollar.** `Alt+Shift+V` pencereyi açar, `Alt+Shift+C` panoda ne varsa (metin, kopyalanmış dosya ya da görsel) her uygulamadan gönderir. Ayarlar'dan değiştirebilir ya da kapatabilirsin.
 
 **Telefon ya da tablet.** **Ayarlar → Telefon ve tablet → QR kodu göster**'i aç ve aynı Wi-Fi'daki telefonun kamerasıyla okut. Açılan sayfada aynı liste görünür: metne dokunup kopyala, dosyayı kaydet ya da geri metin ve dosya gönder. Eşleşme kodunu değiştirene kadar yer iminden de çalışır. Tarayıcıdan gönderilen dosyalar 300 MB ile sınırlıdır.
+
+**Uyutma.** Penceredeki **Uyut**'a bas (ya da tepsi menüsünden işaretle); ağ kapanır: yayın yapılmaz, port açık kalmaz, hiçbir şey gönderilmez ve alınmaz. Uygulamayı yeniden başlatsan da uykuda kalır. Bu sırada eklediklerin saklanır ve **Uyandır**'a basınca eşitlenir.
 
 Pencere başka yere tıklayınca kapanır; Finder ya da Explorer'dan dosya sürükleyeceksen önce **Sabitle**'ye bas. macOS'ta dosyayı doğrudan menü çubuğundaki ikona da bırakabilirsin.
 

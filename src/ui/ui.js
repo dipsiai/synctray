@@ -136,13 +136,18 @@ function renderPlainList(target, entries, emptyText, onRemove) {
 
 function render() {
   if (!state) return;
-  const { items, peers, device, manualPeers, pinned, isMac } = state;
+  const { items, peers, device, manualPeers, pinned, asleep, isMac } = state;
   transfers = state.transfers || {};
 
   $('status').classList.toggle('online', peers.length > 0);
-  $('status-text').textContent = peers.length
-    ? tr('connected', { names: peers.map((p) => p.name).join(', ') })
-    : tr('searching');
+  $('status-text').textContent = asleep
+    ? tr('asleepStatus')
+    : peers.length
+      ? tr('connected', { names: peers.map((p) => p.name).join(', ') })
+      : tr('searching');
+  $('sleep').textContent = tr(asleep ? 'wake' : 'sleep');
+  $('sleep').classList.toggle('active', asleep);
+  if (asleep) toggleQr(false);
   $('pin').classList.toggle('active', pinned);
   $('send-hint').textContent = isMac ? '⌘↵' : 'Ctrl+Enter';
 
@@ -220,6 +225,7 @@ window.addEventListener('drop', (e) => {
 
 // ---- Header and settings ----
 
+$('sleep').onclick = () => api.call('set-asleep', !state.asleep);
 $('pin').onclick = () => api.call('set-pinned', !state.pinned);
 
 function toggleSettings(open) {
@@ -289,6 +295,11 @@ async function toggleQr(show) {
   canvas.hidden = !show;
   $('qr-toggle').textContent = tr(show ? 'hideQr' : 'showQr');
   if (!show) return;
+  if (state.asleep) {
+    canvas.hidden = true;
+    $('qr-toggle').textContent = tr('showQr');
+    return showToast(tr('asleepQr'));
+  }
   const rows = await api.call('web-link');
   if (!rows) {
     canvas.hidden = true;

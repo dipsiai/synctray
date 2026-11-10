@@ -105,6 +105,22 @@ function device(root, name, code) {
     assert.strictEqual(forged.status, 401);
     console.log('✓ device without the pairing code was rejected');
 
+    // 7. Sleep and wake: an asleep device is silent and unreachable, then catches up
+    const oldPort = c.net.port;
+    await c.net.sleep();
+    assert.strictEqual(c.net.peers.size, 0);
+    await assert.rejects(fetch(`http://127.0.0.1:${oldPort}/m`), 'an asleep device must not listen');
+    const whileAsleep = await a.store.addText('sent while the tablet slept');
+    a.net.publish(whileAsleep);
+    const fromSleeper = await c.store.addText('written while asleep');
+    c.net.publish(fromSleeper);
+    await sleep(1500);
+    assert.ok(!c.store.get(whileAsleep.id), 'an asleep device must not receive');
+    assert.ok(!a.store.get(fromSleeper.id), 'an asleep device must not send');
+    await c.net.wake();
+    await until(() => c.store.get(whileAsleep.id) && a.store.get(fromSleeper.id), 'catch up after waking');
+    console.log('✓ asleep device was silent, then caught up in both directions after waking');
+
     console.log('\nAll tests passed.');
   } catch (err) {
     console.error('\n✗ TEST FAILED:', err.message);

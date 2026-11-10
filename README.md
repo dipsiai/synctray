@@ -16,6 +16,7 @@ Paste some text or drop a file on one computer, open the tray on the other, and 
 - Keeps the last 50 items for 7 days, with "clear all" across every device
 - Phones and tablets join from their browser by scanning a QR code, no app to install
 - Global shortcuts: open the window or send the clipboard from any app
+- Sleep button: turns the network off completely until you wake it
 - English and Turkish UI, picked from the system language
 - Two small runtime dependencies besides Electron (`@noble/ciphers`, `qrcode-generator`)
 
@@ -44,6 +45,8 @@ If they do not find each other (some routers and guest networks block broadcast)
 **Shortcuts.** `Alt+Shift+V` opens the window and `Alt+Shift+C` sends whatever is on the clipboard (text, a copied file or an image) from any app. Change or clear them under Settings.
 
 **Phone or tablet.** Open **Settings → Phone and tablet → Show QR code** and scan it with the camera of a phone on the same Wi-Fi. The page that opens shows the same list: tap to copy a text, save a file, or send text and files back. It keeps working from a bookmark until you change the pairing code. Files sent from the browser are limited to 300 MB.
+
+**Sleep.** Press **Sleep** in the window (or tick it in the tray menu) to turn the network off: no broadcasts, no open port, nothing sent or received. It stays asleep across restarts. Anything you add meanwhile is kept and syncs when you press **Wake**.
 
 The window closes when you click elsewhere; press **Pin** first if you want to drag files in from Finder or Explorer. On macOS you can also drop files straight onto the menu bar icon.
 

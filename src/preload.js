@@ -17,6 +17,7 @@ const CALLS = new Set([
   'add-manual-peer',
   'remove-manual-peer',
   'set-pinned',
+  'set-asleep',
   'hide',
   'quit',
 ]);
