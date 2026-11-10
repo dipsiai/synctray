@@ -229,7 +229,10 @@ function toggleSettings(open) {
   if (open) {
     $('device-name').value = state.device.name;
     $('device-code').value = formatCode(state.device.code);
+    paintShortcuts();
   } else {
+    toggleQr(false); // never leave the key on screen
+
     input.focus();
   }
 }
@@ -237,6 +240,72 @@ function toggleSettings(open) {
 function saveDevice() {
   api.call('set-device', { name: $('device-name').value, code: $('device-code').value });
 }
+
+// ---- Shortcuts ----
+
+// Builds an Electron accelerator ("Alt+Shift+V") from a key press. Uses the physical key,
+// because Option on macOS changes the character a key produces.
+function acceleratorFrom(event) {
+  const code = event.code;
+  let key = null;
+  if (/^Key[A-Z]$/.test(code)) key = code.slice(3);
+  else if (/^Digit\d$/.test(code)) key = code.slice(5);
+  else if (/^F\d{1,2}$/.test(code)) key = code;
+  else if (code === 'Space') key = 'Space';
+  if (!key) return null;
+  const mods = [];
+  if (event.ctrlKey) mods.push('Control');
+  if (event.metaKey) mods.push(state.isMac ? 'Command' : 'Super');
+  if (event.altKey) mods.push('Alt');
+  if (event.shiftKey) mods.push('Shift');
+  // A bare letter would swallow normal typing everywhere; function keys are fine alone.
+  if (!mods.length && !/^F\d/.test(key)) return null;
+  return [...mods, key].join('+');
+}
+
+function paintShortcuts() {
+  for (const field of document.querySelectorAll('.shortcut')) {
+    field.value = state.shortcuts[field.dataset.shortcut] || tr('shortcutNone');
+  }
+}
+
+for (const field of document.querySelectorAll('.shortcut')) {
+  field.addEventListener('keydown', (event) => {
+    if (event.key === 'Tab' || event.key === 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    const clear = event.key === 'Backspace' || event.key === 'Delete';
+    const accelerator = clear ? '' : acceleratorFrom(event);
+    if (accelerator === null) return;
+    field.value = accelerator || tr('shortcutNone');
+    api.call('set-shortcut', { name: field.dataset.shortcut, accelerator });
+  });
+}
+
+// ---- Phone QR code ----
+
+async function toggleQr(show) {
+  const canvas = $('qr');
+  canvas.hidden = !show;
+  $('qr-toggle').textContent = tr(show ? 'hideQr' : 'showQr');
+  if (!show) return;
+  const rows = await api.call('web-link');
+  if (!rows) {
+    canvas.hidden = true;
+    $('qr-toggle').textContent = tr('showQr');
+    return showToast(tr('noNetwork'));
+  }
+  const scale = Math.floor(220 / (rows.length + 8)) || 1;
+  const margin = 4 * scale; // the quiet zone scanners need
+  canvas.width = canvas.height = rows.length * scale + margin * 2;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = '#000';
+  rows.forEach((row, y) => row.forEach((dark, x) => dark && ctx.fillRect(margin + x * scale, margin + y * scale, scale, scale)));
+}
+
+$('qr-toggle').onclick = () => toggleQr($('qr').hidden);
 
 $('settings-btn').onclick = () => toggleSettings($('settings-view').hidden);
 $('settings-done').onclick = () => toggleSettings(false);

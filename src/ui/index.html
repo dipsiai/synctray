@@ -53,6 +53,20 @@
     </div>
     <ul class="plain" id="manual-list"></ul>
 
+    <h2 data-t="shortcuts"></h2>
+    <label><span data-t="shortcutOpen"></span>
+      <input class="mono shortcut" data-shortcut="open" readonly>
+    </label>
+    <label><span data-t="shortcutSend"></span>
+      <input class="mono shortcut" data-shortcut="send" readonly>
+    </label>
+    <p class="note" data-t="shortcutHint"></p>
+
+    <h2 data-t="phoneTitle"></h2>
+    <p class="note" data-t="phoneNote"></p>
+    <div class="row"><button id="qr-toggle" data-t="showQr"></button></div>
+    <canvas id="qr" hidden></canvas>
+
     <div class="row end">
       <button id="quit" data-t="quitApp"></button>
       <button class="primary" id="settings-done" data-t="done"></button>

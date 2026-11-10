@@ -9,6 +9,7 @@ const http = require('http');
 const dgram = require('dgram');
 const os = require('os');
 const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
 const { Readable, Transform } = require('stream');
 const { pipeline } = require('stream/promises');
@@ -25,6 +26,21 @@ const RETRY_MS = 3000;
 const MAX_CLOCK_SKEW_MS = 24 * 3600 * 1000;
 const MAX_BODY = 16 * 1024 * 1024;
 const PUSH_CHUNK = 2 * 1024 * 1024;
+const MAX_TEXT = 4 * 1024 * 1024;
+
+// The page phones and tablets open in their browser. It carries no secrets: the key arrives in
+// the URL fragment (from the QR code), which browsers never send over the network.
+const WEB_DIR = path.join(__dirname, 'web');
+const VENDOR_DIR = path.join(__dirname, '..', 'node_modules', '@noble', 'ciphers');
+const STATIC = {
+  '/m': [WEB_DIR, 'index.html', 'text/html; charset=utf-8'],
+  '/m/app.css': [WEB_DIR, 'app.css', 'text/css; charset=utf-8'],
+  '/m/app.mjs': [WEB_DIR, 'app.mjs', 'text/javascript; charset=utf-8'],
+  '/m/wire.mjs': [WEB_DIR, 'wire.mjs', 'text/javascript; charset=utf-8'],
+  '/m/vendor/aes.js': [VENDOR_DIR, 'aes.js', 'text/javascript; charset=utf-8'],
+  '/m/vendor/_polyval.js': [VENDOR_DIR, '_polyval.js', 'text/javascript; charset=utf-8'],
+  '/m/vendor/utils.js': [VENDOR_DIR, 'utils.js', 'text/javascript; charset=utf-8'],
+};
 
 const RM = { force: true, maxRetries: 5, retryDelay: 100 };
 
@@ -393,7 +409,7 @@ class Net extends EventEmitter {
     }
   }
 
-  async serveFile(res, id, peer, nonce) {
+  async serveFile(res, id, peer, nonce, web = false) {
     const file = this.store.filePath(id);
     const { size } = await fs.promises.stat(file);
     const stream = fs.createReadStream(file);
@@ -402,7 +418,8 @@ class Net extends EventEmitter {
     this.transfers.set(key, transfer);
     res.writeHead(200, { 'content-type': 'application/octet-stream' });
     try {
-      await pipeline(stream, this.counter(transfer), encryptStream(this.keys().enc, `file ${nonce}`), res);
+      const key = web ? this.keys().web : this.keys().enc;
+      await pipeline(stream, this.counter(transfer), encryptStream(key, `file ${nonce}`, { web }), res);
     } catch {
       // the receiver dropped the connection; it will ask again
     } finally {
@@ -411,10 +428,124 @@ class Net extends EventEmitter {
     }
   }
 
-  // ---- Sunucu ----
+  // ---- Phones and tablets (browser) ----
+
+  // Link for the QR code. The key sits in the fragment, so it never leaves the phone.
+  webLink() {
+    const [ip] = this.localIPs();
+    return ip ? `http://${ip.address}:${this.port}/m#${this.keys().web.toString('base64url')}` : null;
+  }
+
+  serveStatic(res, pathname) {
+    const entry = STATIC[pathname];
+    if (!entry) return false;
+    const [dir, name, type] = entry;
+    fs.readFile(path.join(dir, name), (err, body) => {
+      if (err) {
+        res.writeHead(404);
+        return res.end();
+      }
+      res.writeHead(200, {
+        'content-type': type,
+        'cache-control': 'no-cache',
+        'referrer-policy': 'no-referrer',
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': "default-src 'self'; img-src 'self' blob: data:; frame-ancestors 'none'",
+      });
+      res.end(body);
+    });
+    return true;
+  }
+
+  // Same sealed-request scheme as between devices, but with the web key and its own routes.
+  async handleWeb(req, res, pathname) {
+    const { web } = this.keys();
+    const deny = () => {
+      res.writeHead(401);
+      res.end();
+    };
+    let meta;
+    let nonce;
+    try {
+      const box = Buffer.from(String(req.headers['x-seal'] || ''), 'base64');
+      meta = JSON.parse(open(web, box, `web ${req.method} ${pathname}`));
+      nonce = box.subarray(0, 12).toString('hex');
+      if (Math.abs(Date.now() - meta.ts) > MAX_CLOCK_SKEW_MS) return deny();
+    } catch {
+      return deny();
+    }
+
+    const json = (code, payload) => {
+      res.writeHead(code, { 'content-type': 'application/octet-stream' });
+      res.end(seal(web, JSON.stringify(payload), `resp ${nonce}`));
+    };
+    const from = {
+      id: `web-${String(meta.device || '').replace(/[^\w-]/g, '').slice(0, 40)}`,
+      name: String(meta.name || 'Phone').slice(0, 40),
+    };
+    const announce = (item) => {
+      this.publish(item);
+      this.emit('incoming', [item]);
+    };
+
+    if (req.method === 'GET' && pathname.startsWith('/w/file/')) {
+      const id = pathname.slice('/w/file/'.length);
+      if (!this.store.hasFile(id)) return json(404, { error: 'not found' });
+      return this.serveFile(res, id, from, nonce, true);
+    }
+
+    if (req.method === 'POST' && pathname === '/w/upload') {
+      const id = crypto.randomUUID();
+      const dest = this.store.filePath(id);
+      const part = dest + '.part';
+      try {
+        await pipeline(req, decryptStream(web, `file ${nonce}`, { web: true }), fs.createWriteStream(part));
+        const { size } = await fs.promises.stat(part);
+        await fs.promises.rename(part, dest);
+        announce(this.store.adopt(id, meta.fileName, size, from));
+        return json(200, { ok: true, id });
+      } catch {
+        await fs.promises.rm(part, RM).catch(() => {});
+        return json(400, { error: 'upload failed' });
+      }
+    }
+
+    if (req.method !== 'POST') return json(404, { error: 'unknown path' });
+    let data;
+    try {
+      data = JSON.parse(open(web, await readBody(req), `body ${nonce}`)) || {};
+    } catch {
+      return deny();
+    }
+
+    if (pathname === '/w/list') {
+      return json(200, { device: this.store.device.name, me: from.id, items: this.store.list() });
+    }
+
+    if (pathname === '/w/text') {
+      const text = typeof data.text === 'string' ? data.text : '';
+      if (!text.trim() || text.length > MAX_TEXT) return json(400, { error: 'bad text' });
+      const item = await this.store.addText(text, from);
+      announce(item);
+      return json(200, { ok: true, id: item.id });
+    }
+
+    if (pathname === '/w/delete') {
+      const ts = Date.now();
+      if (this.store.remove(String(data.id), ts)) this.publishDelete(data.id, ts);
+      return json(200, { ok: true });
+    }
+
+    json(404, { error: 'unknown path' });
+  }
+
+  // ---- Server ----
 
   async handle(req, res) {
     const pathname = new URL(req.url, 'http://x').pathname;
+    if (req.method === 'GET' && this.serveStatic(res, pathname)) return;
+    if (pathname.startsWith('/w/')) return this.handleWeb(req, res, pathname);
+
     const { enc } = this.keys();
     const deny = () => {
       res.writeHead(401);

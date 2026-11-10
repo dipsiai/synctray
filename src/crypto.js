@@ -2,8 +2,11 @@
 //
 // - The key is derived from the pairing code with scrypt (slow on purpose, so guessing codes is costly).
 // - Every message is sealed with AES-256-GCM: contents are hidden and any tampering is detected.
-// - Files are encrypted in 64 KB chunks with a per-transfer key; chunk order and the end of the
-//   file are authenticated too, so cutting a stream short or reordering it is detected.
+// - Files are encrypted in 64 KB chunks; chunk order and the end of the file are authenticated
+//   too, so cutting a stream short or reordering it is detected.
+// - Phones and tablets use a separate key (`web`) handed over in a QR code. Their browser cannot
+//   run scrypt/HKDF cheaply, so the web variant of the file stream uses that key directly with a
+//   random nonce prefix instead of deriving a per-transfer key. src/web/wire.mjs is the browser side.
 const crypto = require('crypto');
 const { Transform } = require('stream');
 
@@ -16,7 +19,7 @@ const FRAME_HEAD = 5; // 4-byte length + 1-byte "last chunk" flag
 function deriveKeys(code) {
   const master = crypto.scryptSync(code, 'synctray/v3', 32, { N: 1 << 15, r: 8, p: 1, maxmem: 128 * 1024 * 1024 });
   const sub = (label) => Buffer.from(crypto.hkdfSync('sha256', master, Buffer.alloc(0), label, 32));
-  return { enc: sub('enc'), group: sub('group').toString('hex').slice(0, 12) };
+  return { enc: sub('enc'), web: sub('web'), group: sub('group').toString('hex').slice(0, 12) };
 }
 
 function encrypt(key, nonce, plain, aad) {
@@ -45,24 +48,31 @@ function open(key, box, aad) {
   return decrypt(key, box.subarray(0, NONCE), box.subarray(NONCE), aad);
 }
 
-const fileKey = (key, salt) => Buffer.from(crypto.hkdfSync('sha256', key, salt, 'file', 32));
+// Per-stream key and nonce prefix from the 16-byte stream header.
+// Device-to-device: fresh key per transfer, zero prefix. Web: shared key, random 8-byte prefix.
+function streamParams(key, salt, web) {
+  return web
+    ? { k: key, prefix: salt.subarray(0, 8) }
+    : { k: Buffer.from(crypto.hkdfSync('sha256', key, salt, 'file', 32)), prefix: Buffer.alloc(8) };
+}
 
-function frameNonce(index) {
+function frameNonce(prefix, index) {
   const nonce = Buffer.alloc(NONCE);
-  nonce.writeUInt32BE(index, NONCE - 4);
+  prefix.copy(nonce, 0);
+  nonce.writeUInt32BE(index, 8);
   return nonce;
 }
 
 // Stream format: [16-byte salt] then frames: [length u32 | last? u8 | encrypted chunk + tag]
-function encryptStream(key, aad) {
+function encryptStream(key, aad, { web = false } = {}) {
   const salt = crypto.randomBytes(SALT);
-  const k = fileKey(key, salt);
+  const { k, prefix } = streamParams(key, salt, web);
   let pending = Buffer.alloc(0);
   let index = 0;
   let started = false;
 
   const frame = (plain, final) => {
-    const sealed = encrypt(k, frameNonce(index++), plain, `${aad} ${final ? 1 : 0}`);
+    const sealed = encrypt(k, frameNonce(prefix, index++), plain, `${aad} ${final ? 1 : 0}`);
     const head = Buffer.alloc(FRAME_HEAD);
     head.writeUInt32BE(sealed.length, 0);
     head[4] = final ? 1 : 0;
@@ -91,9 +101,9 @@ function encryptStream(key, aad) {
   });
 }
 
-function decryptStream(key, aad) {
+function decryptStream(key, aad, { web = false } = {}) {
   let buffer = Buffer.alloc(0);
-  let k = null;
+  let params = null;
   let index = 0;
   let finished = false;
 
@@ -101,9 +111,9 @@ function decryptStream(key, aad) {
     transform(chunk, _enc, done) {
       try {
         buffer = buffer.length ? Buffer.concat([buffer, chunk]) : chunk;
-        if (!k) {
+        if (!params) {
           if (buffer.length < SALT) return done();
-          k = fileKey(key, buffer.subarray(0, SALT));
+          params = streamParams(key, Buffer.from(buffer.subarray(0, SALT)), web);
           buffer = buffer.subarray(SALT);
         }
         while (buffer.length >= FRAME_HEAD) {
@@ -113,7 +123,7 @@ function decryptStream(key, aad) {
           if (length < TAG || length > CHUNK + TAG) throw new Error('corrupt chunk');
           if (buffer.length < FRAME_HEAD + length) break;
           const sealed = buffer.subarray(FRAME_HEAD, FRAME_HEAD + length);
-          this.push(decrypt(k, frameNonce(index++), sealed, `${aad} ${final ? 1 : 0}`));
+          this.push(decrypt(params.k, frameNonce(params.prefix, index++), sealed, `${aad} ${final ? 1 : 0}`));
           buffer = buffer.subarray(FRAME_HEAD + length);
           finished = final;
         }

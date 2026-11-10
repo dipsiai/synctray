@@ -225,6 +225,9 @@ h2 { margin: 16px 0 4px; font-size: 12px; font-weight: 600; }
 .note { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
 .note .mono { color: var(--text); user-select: text; }
 
+#qr[hidden] { display: none; }
+#qr { display: block; margin: 10px auto 0; border-radius: 8px; image-rendering: pixelated; }
+
 ul.plain { list-style: none; margin: 4px 0 0; padding: 0; }
 ul.plain li { display: flex; align-items: center; gap: 8px; padding: 3px 0; }
 ul.plain li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

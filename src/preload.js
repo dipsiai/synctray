@@ -11,6 +11,8 @@ const CALLS = new Set([
   'download',
   'menu',
   'clear-all',
+  'web-link',
+  'set-shortcut',
   'set-device',
   'add-manual-peer',
   'remove-manual-peer',

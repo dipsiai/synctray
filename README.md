@@ -14,8 +14,10 @@ Paste some text or drop a file on one computer, open the tray on the other, and 
 - Everything on the wire is encrypted (AES-256-GCM) with a key derived from a pairing code
 - Files are copied to the other device right away, so they stay available after the sender goes to sleep
 - Keeps the last 50 items for 7 days, with "clear all" across every device
+- Phones and tablets join from their browser by scanning a QR code, no app to install
+- Global shortcuts: open the window or send the clipboard from any app
 - English and Turkish UI, picked from the system language
-- No runtime dependencies beyond Electron
+- Two small runtime dependencies besides Electron (`@noble/ciphers`, `qrcode-generator`)
 
 ## Install
 
@@ -39,6 +41,10 @@ If they do not find each other (some routers and guest networks block broadcast)
    - click a text to copy it
    - right-click a file for **Save to Desktop** or **Save as…**
 
+**Shortcuts.** `Alt+Shift+V` opens the window and `Alt+Shift+C` sends whatever is on the clipboard (text, a copied file or an image) from any app. Change or clear them under Settings.
+
+**Phone or tablet.** Open **Settings → Phone and tablet → Show QR code** and scan it with the camera of a phone on the same Wi-Fi. The page that opens shows the same list: tap to copy a text, save a file, or send text and files back. It keeps working from a bookmark until you change the pairing code. Files sent from the browser are limited to 300 MB.
+
 The window closes when you click elsewhere; press **Pin** first if you want to drag files in from Finder or Explorer. On macOS you can also drop files straight onto the menu bar icon.
 
 ## Security
@@ -46,6 +52,7 @@ The window closes when you click elsewhere; press **Pin** first if you want to d
 - All traffic between devices is encrypted and authenticated: texts, files, file names, device names and discovery packets. The key is derived from the pairing code with scrypt. Someone on the same network without the code cannot read, add, delete or alter anything. See [`src/crypto.js`](src/crypto.js).
 - Security rests on the pairing code, so keep it private. New installs generate a 12-character code; you can set a longer one in Settings.
 - Received files are stored under a random id with no extension. They only get their real name when you save them, and executable file types ask for confirmation first.
+- The phone page is encrypted with the same strength, using a key carried in the QR code (it stays in the URL fragment, which browsers never send over the network). One limit: the page itself is loaded over plain HTTP, because browsers do not accept certificates for local addresses. Someone who can already alter traffic on your network could tamper with the page as it loads. Listening alone reveals nothing.
 - Not covered: data at rest is not encrypted, and the code has not had an independent security audit. It is built for networks you trust (home, office). For use across the internet, put the devices on a VPN such as Tailscale and add the peer's VPN address manually.
 
 ## Run from source
@@ -73,6 +80,7 @@ npm run dist:win   # zip in dist/
 - [`src/crypto.js`](src/crypto.js): key derivation, sealed messages and the chunked file stream.
 - [`src/main.js`](src/main.js): tray icon, window, clipboard, saving files.
 - [`src/ui/`](src/ui): the window's interface.
+- [`src/web/`](src/web): the page phones and tablets open, and its copy of the encryption.
 - [`src/i18n.js`](src/i18n.js): UI strings.
 
 ## Tests
@@ -82,7 +90,7 @@ npm test
 npm run test:stress
 ```
 
-`npm test` starts virtual devices on one machine and checks text, file, delete, late join and unauthorized access. The stress suite covers bursts of hundreds of texts, both devices sending at once, a 300 MB file, devices restarting or freezing mid-transfer, deleting during a transfer, forged requests, and that nothing on the wire is readable.
+`npm test` starts virtual devices on one machine and checks text, file, delete, late join and unauthorized access, then exercises the phone page's API with the same encryption code the browser runs. The stress suite covers bursts of hundreds of texts, both devices sending at once, a 300 MB file, devices restarting or freezing mid-transfer, deleting during a transfer, forged requests, and that nothing on the wire is readable.
 
 ## License
 

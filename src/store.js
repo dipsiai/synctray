@@ -115,14 +115,15 @@ class Store extends EventEmitter {
     }));
   }
 
-  async addText(text) {
+  // `from` defaults to this device; the web page for phones passes its own identity.
+  async addText(text, from = this.device) {
     if (text.length > MAX_INLINE_TEXT) {
       const d = new Date();
       const two = (n) => String(n).padStart(2, '0');
       const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
-      return this.addBuffer(`text-${stamp}.txt`, Buffer.from(text, 'utf8'));
+      return this.addBuffer(`text-${stamp}.txt`, Buffer.from(text, 'utf8'), from);
     }
-    const item = { id: crypto.randomUUID(), type: 'text', text, from: this.device, ts: this.now() };
+    const item = { id: crypto.randomUUID(), type: 'text', text, from, ts: this.now() };
     this.insert(item);
     return item;
   }
@@ -145,17 +146,16 @@ class Store extends EventEmitter {
     return item;
   }
 
-  async addBuffer(name, buffer) {
+  async addBuffer(name, buffer, from = this.device) {
     const id = crypto.randomUUID();
     await fs.promises.writeFile(this.filePath(id), buffer);
-    const item = {
-      id,
-      type: 'file',
-      name: path.basename(name || 'file'),
-      size: buffer.length,
-      from: this.device,
-      ts: this.now(),
-    };
+    return this.adopt(id, name, buffer.length, from);
+  }
+
+  // Registers a file that is already in place at filePath(id).
+  adopt(id, name, size, from = this.device) {
+    const clean = path.basename(String(name || 'file').replace(/\\/g, '/')).slice(0, 255) || 'file';
+    const item = { id, type: 'file', name: clean, size, from, ts: this.now() };
     this.insert(item);
     return item;
   }

@@ -1,7 +1,7 @@
 {
   "name": "synctray",
   "productName": "SyncTray",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Tray app that shares text and files between computers on the same network",
   "main": "src/main.js",
   "author": "dipsiai",
@@ -9,10 +9,11 @@
   "scripts": {
     "start": "electron .",
     "icons": "node scripts/make-icons.js",
-    "test": "node scripts/test-sync.js",
+    "test": "node scripts/test-sync.js && node scripts/test-web.js",
     "test:stress": "node scripts/test-stress.js",
     "dist:mac": "electron-builder --mac --arm64 --x64",
-    "dist:win": "electron-builder --win --x64"
+    "dist:win": "electron-builder --win --x64",
+    "test:web": "node scripts/test-web.js"
   },
   "build": {
     "appId": "com.emre.synctray",
@@ -43,5 +44,9 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/dipsiai/synctray.git"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^2.4.0",
+    "qrcode-generator": "^2.0.4"
   }
 }

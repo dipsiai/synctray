@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#2563eb">
+  <title>SyncTray</title>
+  <link rel="stylesheet" href="/m/app.css">
+</head>
+<body>
+  <header>
+    <span class="dot" id="dot"></span>
+    <span id="status">SyncTray</span>
+  </header>
+
+  <main id="app" hidden>
+    <section class="composer">
+      <textarea id="input" rows="3" spellcheck="false"></textarea>
+      <div class="row">
+        <label class="btn" id="pick-label"><span id="pick-text"></span><input type="file" id="pick" multiple hidden></label>
+        <button class="btn primary" id="send" disabled></button>
+      </div>
+    </section>
+    <ul id="list"></ul>
+    <p class="empty" id="empty" hidden></p>
+  </main>
+
+  <p class="notice" id="notice" hidden></p>
+  <div id="toast" hidden></div>
+  <script type="module" src="/m/app.mjs"></script>
+</body>
+</html>

@@ -1,4 +1,6 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, clipboard, nativeImage, screen, dialog, Notification } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, clipboard, nativeImage, screen, dialog, Notification, globalShortcut } = require('electron');
+const { fileURLToPath } = require('url');
+const qrcode = require('qrcode-generator');
 const path = require('path');
 const fs = require('fs');
 const { Store } = require('./store');
@@ -8,6 +10,8 @@ const { STRINGS, pickLanguage, translator } = require('./i18n');
 const isMac = process.platform === 'darwin';
 const WIDTH = 380;
 const HEIGHT = 560;
+// Work from any app. Changeable in Settings; an empty value turns one off.
+const DEFAULT_SHORTCUTS = { open: 'Alt+Shift+V', send: 'Alt+Shift+C' };
 
 // SYNC_PROFILE=second npm start → runs a second "device" on the same machine (for testing).
 const profile = process.env.SYNC_PROFILE;
@@ -50,7 +54,83 @@ async function init() {
   net.on('progress', () => send('progress', net.transferState()));
   setInterval(() => store.expire(), 3600 * 1000);
   await net.start();
+  registerShortcuts();
+  app.on('will-quit', () => globalShortcut.unregisterAll());
   pushState();
+}
+
+const shortcuts = () => ({ ...DEFAULT_SHORTCUTS, ...store.state.shortcuts });
+
+// Returns the accelerators that could not be registered (taken by another app, or invalid).
+function registerShortcuts() {
+  const actions = {
+    open: () => (win.isVisible() ? hideWindow() : showWindow()),
+    send: sendClipboard,
+  };
+  globalShortcut.unregisterAll();
+  const failed = [];
+  for (const [name, accelerator] of Object.entries(shortcuts())) {
+    if (!accelerator || !actions[name]) continue;
+    let ok = false;
+    try {
+      ok = globalShortcut.register(accelerator, actions[name]);
+    } catch {
+      ok = false;
+    }
+    if (!ok) failed.push(accelerator);
+  }
+  return failed;
+}
+
+// Files copied in Finder/Explorer, as paths. Empty when the clipboard holds something else.
+function clipboardFiles() {
+  try {
+    if (isMac) {
+      const url = clipboard.read('public.file-url');
+      return url ? [fileURLToPath(url)] : [];
+    }
+    const raw = clipboard.readBuffer('FileNameW');
+    const name = raw.toString('ucs2').replace(/\0+$/, '');
+    return name ? [name] : [];
+  } catch {
+    return [];
+  }
+}
+
+// The window is usually hidden when a shortcut fires, so confirm with a quiet notification.
+function announce(message) {
+  if (win.isVisible()) return toast(message);
+  if (Notification.isSupported()) new Notification({ title: 'SyncTray', body: message, silent: true }).show();
+}
+
+async function sendClipboard() {
+  const files = clipboardFiles().filter((p) => fs.existsSync(p));
+  if (files.length) {
+    await addFiles(files);
+    return announce(t('sent'));
+  }
+  const text = clipboard.readText();
+  if (text.trim()) {
+    await addText(text);
+    return announce(t('sent'));
+  }
+  const image = clipboard.readImage();
+  if (!image.isEmpty()) {
+    net.publish(await store.addBuffer('clipboard.png', image.toPNG()));
+    return announce(t('sent'));
+  }
+  announce(t('clipboardEmpty'));
+}
+
+// QR code for the phone page, as rows of booleans for the window to draw.
+function webLink() {
+  const url = net.webLink();
+  if (!url) return null;
+  const qr = qrcode(0, 'M');
+  qr.addData(url);
+  qr.make();
+  const size = qr.getModuleCount();
+  return Array.from({ length: size }, (_r, row) => Array.from({ length: size }, (_c, col) => qr.isDark(row, col)));
 }
 
 function createWindow() {
@@ -87,6 +167,11 @@ function createWindow() {
       dialogOpen = true; // don't hide on focus loss
       showWindow();
       await new Promise((r) => setTimeout(r, Number(process.env.SYNC_DEBUG_DELAY) || 1500));
+      // Development only: drive the window before the screenshot, e.g. to open Settings.
+      if (process.env.SYNC_DEBUG_EVAL) {
+        await win.webContents.executeJavaScript(process.env.SYNC_DEBUG_EVAL);
+        await new Promise((r) => setTimeout(r, 800));
+      }
       fs.writeFileSync(shot, (await win.webContents.capturePage()).toPNG());
       dialogOpen = false;
     });
@@ -114,7 +199,8 @@ function trayMenu() {
     { label: t('trayOpen'), click: showWindow },
     {
       label: t('traySendClipboard'),
-      click: () => addText(clipboard.readText()),
+      accelerator: shortcuts().send || undefined,
+      click: sendClipboard,
     },
     { type: 'separator' },
     {
@@ -167,6 +253,7 @@ function getState() {
     manualPeers: store.state.manualPeers,
     pinned: store.state.pinned,
     transfers: net.transferState(),
+    shortcuts: shortcuts(),
     isMac,
   };
 }
@@ -359,6 +446,13 @@ function registerIpc() {
     download: (id) => downloadToDesktop(id),
     menu: (id) => itemMenu(id),
     'clear-all': () => clearAll(),
+    'web-link': () => webLink(),
+    'set-shortcut': ({ name, accelerator }) => {
+      if (!(name in DEFAULT_SHORTCUTS)) return;
+      store.set({ shortcuts: { ...shortcuts(), [name]: String(accelerator || '') } });
+      const failed = registerShortcuts();
+      if (failed.length) toast(t('shortcutTaken', { keys: failed.join(', ') }));
+    },
     'set-device': ({ name, code }) => {
       const before = store.state.code;
       store.set({ deviceName: name, code });
